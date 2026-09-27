@@ -441,6 +441,14 @@ export const Copy = (p: IconProps) => (
 );
 
 /** 属性（右键菜单最后那一项）。圆圈里一个 i */
+/** 四角星 —— 助手的标记。**别拿它当"更多"用**：它只表示"这是 AI 干的" */
+export const Sparkle = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M8 2.4l1.15 3.05L12.2 6.6 9.15 7.75 8 10.8 6.85 7.75 3.8 6.6l3.05-1.15L8 2.4Z" />
+    <path d="M12.6 10.4l.5 1.3 1.3.5-1.3.5-.5 1.3-.5-1.3-1.3-.5 1.3-.5.5-1.3Z" />
+  </Svg>
+);
+
 export const Info = (p: IconProps) => (
   <Svg {...p}>
     <circle cx="8" cy="8" r="6" />

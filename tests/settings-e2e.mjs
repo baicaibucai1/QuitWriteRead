@@ -163,10 +163,34 @@ ok('对话框出来了', await page.isVisible('[data-settings-panel]'));
   ok('遮罩在', (await page.locator('[data-settings-mask]').count()) === 1);
 
   const text = await page.textContent('[data-settings-panel]');
-  ok('四节导航都在', ['常规', '同步', '阅读', '关于'].every((t) => text.includes(t)));
+  ok('五节导航都在', ['常规', '推送', 'AI 助手', '阅读', '关于'].every((t) => text.includes(t)));
   ok('面板里没有壁纸字样了', !text.includes('壁纸') && !text.includes('台面'));
   ok('默认停在常规', (await page.getAttribute('[data-settings-panel]', 'data-settings-tab')) === 'general');
-  ok('导航项有四颗', (await page.locator('[data-settings-nav-item]').count()) === 4);
+  ok('导航项有五颗', (await page.locator('[data-settings-nav-item]').count()) === 5);
+}
+
+step('AI 助手那一节：默认演示，不放假输入框');
+{
+  await page.click('[data-settings-nav-item="agent"]');
+  await page.waitForTimeout(200);
+  ok('切到 AI 助手', (await page.getAttribute('[data-settings-panel]', 'data-settings-tab')) === 'agent');
+  // 默认演示模式：那三个输入框**不该在** —— 填了也不生效，摆着就是骗人
+  ok('演示默认开着', (await page.getAttribute('[data-toggle="agent-demo"]', 'aria-checked')) === 'true');
+  ok('演示时没有 Key 输入框', (await page.locator('[data-agent-key]').count()) === 0);
+  ok('演示时说清了它演的是哪几步', (await page.textContent('[data-agent-demo-notes]')).includes('真的去读你的仓库'));
+
+  await page.click('[data-toggle="agent-demo"]');
+  await page.waitForTimeout(200);
+  ok('关掉演示才给三个输入框', (await page.locator('[data-agent-key]').count()) === 1);
+  ok('地址给了默认值', (await page.inputValue('[data-agent-baseurl]')).startsWith('http'));
+  await page.fill('[data-agent-model]', 'qwen-plus');
+  await page.waitForTimeout(150);
+  const st = await page.evaluate(() => window.__suisui.getState().agent);
+  ok('填的模型进了 store', st.model === 'qwen-plus');
+  ok('演示开关真的翻了', st.demo === false);
+  // 还原：后面的用例不该接着一份改过的助手配置
+  await page.click('[data-toggle="agent-demo"]');
+  await page.waitForTimeout(150);
 }
 
 step('分节导航切得动');

@@ -31,6 +31,11 @@ const PreviewPane = lazy(() => import('./components/PreviewPane'));
 const SettingsDialog = lazy(() => import('./components/SettingsDialog'));
 // 阅读器同编辑器：只有真去看书的人才需要它（它带着 epub 解压那一摊）
 const BookPane = lazy(() => import('./components/BookPane'));
+/*
+ * AI 助手同理，而且理由更硬：它拖着**整个 vendored 内核**（40 多个模块）。
+ * 只有打开面板的人才需要它 —— 静态 import 会让每个只想看文件列表的人先下这一坨。
+ */
+const ChatPane = lazy(() => import('./components/ChatPane'));
 
 export default function App() {
   const token = useStore((s) => s.token);
@@ -57,6 +62,8 @@ export default function App() {
   const autoPushMin = useStore((s) => s.autoPushMin);
   const remotePane = useStore((s) => s.remotePane);
   const setRemotePane = useStore((s) => s.setRemotePane);
+  const agentPane = useStore((s) => s.agentPane);
+  const setAgentPane = useStore((s) => s.setAgentPane);
   const conflictOf = useStore((s) => s.conflictOf);
   const closeConflict = useStore((s) => s.closeConflict);
   /*
@@ -166,6 +173,21 @@ export default function App() {
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [conflictOf, closeConflict]);
+
+  /*
+   * 助手面板同上（它自己管自己的 Esc 也行，但放在这儿跟另外两个浮层一个写法：
+   * Esc 收掉浮层是一贯的，别让哪个浮层例外）。
+   * ⚠️ 它是**条件挂载**的：关掉就把 Agent 实例 dispose 掉，
+   * 这也是"改完设置下次打开才生效"的由来 —— 见 ChatPane 里那条注释。
+   */
+  useEffect(() => {
+    if (!agentPane) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setAgentPane(false);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [agentPane, setAgentPane]);
 
   return (
     <div
@@ -345,6 +367,15 @@ export default function App() {
       )}
       {remotePane && <RemotePane />}
       {conflictOf && <ConflictPane />}
+      {/*
+        助手面板。Suspense 兜的是"第一次点开、内核那包还在路上" ——
+        之后再开是瞬间的。
+      */}
+      {agentPane && (
+        <Suspense fallback={null}>
+          <ChatPane />
+        </Suspense>
+      )}
       {/*
         仓库那边的交代（「把 N 篇老笔记搬进来了」/「现在只是暂存」）。
         压在状态栏上面一点点，几秒后自己消失 —— 它是个交代，不是个需要处理的任务。

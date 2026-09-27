@@ -1,7 +1,7 @@
 import { useStore } from '../lib/store';
 import { titleOf } from '../lib/links';
 import ModeSwitch from './ModeSwitch';
-import { PanelRight } from './icons';
+import { PanelRight, Sparkle } from './icons';
 
 /*
  * 顶栏：**这一屏的坐标轴**。
@@ -32,6 +32,9 @@ import { PanelRight } from './icons';
  *      已经有测试钉着"页面里 `header` 只有一个"。
  *   ② 手机上**不出现收栏的箭头**：手机上左栏是浮上来的抽屉（归状态栏那颗 ☰ 管），
  *      右栏压根不渲染。给了就是一颗按了没反应的按钮。
+ *   ③ **助手的入口只有这一颗**。左栏那条 dock 是 272px 里匀四颗，
+ *      再塞第五颗就是"把字挤没了"；而助手不是"某一栏的事"，它读的是整个仓库 ——
+ *      跟"我在哪一半 / 打开的是谁 / 摊开到什么程度"一样，是这一屏级的坐标。
  */
 
 /*
@@ -55,6 +58,8 @@ export default function TopBar() {
   const rightOpen = useStore((s) => s.rightOpen);
   const setRightOpen = useStore((s) => s.setRightOpen);
   const setPickedDir = useStore((s) => s.setPickedDir);
+  const agentPane = useStore((s) => s.agentPane);
+  const setAgentPane = useStore((s) => s.setAgentPane);
 
   const reading = side === 'read';
 
@@ -132,8 +137,31 @@ export default function TopBar() {
         )}
       </div>
 
-      {/* ── 右：这一屏摊开到什么程度 ── */}
-      <div className="hidden shrink-0 items-center gap-1 md:flex">
+      {/* ── 右：这一屏摊开到什么程度 + 助手 ── */}
+      <div className="flex shrink-0 items-center gap-1">
+        {/*
+          「助手」：开那个面板。
+          手机上照样给 —— 它不依赖任何一栏，读的是整个仓库；
+          而手机上收栏箭头不出现，是因为那两栏本身就不存在。
+        */}
+        <button
+          type="button"
+          data-agent-toggle
+          data-on={agentPane ? '1' : '0'}
+          onClick={() => setAgentPane(!agentPane)}
+          aria-pressed={agentPane}
+          title="AI 助手：让它读你的笔记（只读，改不了）"
+          aria-label="AI 助手"
+          className={`${TOGGLE_BTN} ${
+            agentPane
+              ? 'border-accent-line bg-accent-soft text-accent'
+              : 'border-transparent text-ink-3 hover:bg-surface-2 hover:text-ink'
+          }`}
+        >
+          <Sparkle size={14} />
+        </button>
+
+        <div className="hidden shrink-0 items-center gap-1 md:flex">
         <button
           type="button"
           data-left-toggle
@@ -166,6 +194,7 @@ export default function TopBar() {
         >
           <PanelRight size={14} />
         </button>
+        </div>
       </div>
     </header>
   );

@@ -87,7 +87,29 @@ export const SIDEBAR_MAX = 520;
 export const SIDEBAR_DEFAULT = { L: 272, R: 250 } as const;
 
 /** 设置对话框里的四个分节。**每一项都得对应一节真内容**，空节不如不分 */
-export type SettingsTab = 'general' | 'sync' | 'reading' | 'about';
+export type SettingsTab = 'general' | 'sync' | 'agent' | 'reading' | 'about';
+
+/**
+ * AI 助手那一节的三个字段 + 一个演示开关。
+ *
+ * ⚠️ `demo` 默认**开着**：没有 Key 的人打开助手，看到的应该是"跑得起来"，
+ * 而不是"请先配置"（那等于把人挡在门外，还看不出这东西到底能干什么）。
+ * 真要连模型，把开关关掉、填上三个字段 —— 那时候演示那套脚本就不参与了。
+ */
+export type AgentSettings = {
+  /** 演示模式：不连模型，走 `lib/agent/demo.ts` 那套写死的回合 */
+  demo: boolean;
+  baseURL: string;
+  apiKey: string;
+  model: string;
+};
+
+export const DEFAULT_AGENT: AgentSettings = {
+  demo: true,
+  baseURL: 'https://api.openai.com/v1',
+  apiKey: '',
+  model: 'gpt-4o-mini',
+};
 
 /**
  * 每次「比对 / 同步」领一个号。异步回来时号被顶掉就说明有更新的操作在跑，
@@ -276,6 +298,13 @@ type State = {
   provider: ProviderId;
   dav: DavConfig;
   od: OneDriveConfig;
+  /** AI 助手的接法。**持久化** —— 换台机器不重填一遍 equals 白配 */
+  agent: AgentSettings;
+  /**
+   * 助手面板开不开。**不持久化** —— 跟 `settings` 一条理由：
+   * 下次打开被一个对话框糊住半屏是打扰。
+   */
+  agentPane: boolean;
   /**
    * 侧栏按标签筛选（点正文里的 `#tag` 进来的）。`null` = 不筛，照常按目录显示。
    * **不持久化** —— 下次打开看见列表只露出几个文件会以为文件丢了。
@@ -376,6 +405,9 @@ type State = {
   setProvider: (id: ProviderId) => void;
   setDav: (patch: Partial<DavConfig>) => void;
   setOd: (patch: Partial<OneDriveConfig>) => void;
+  /** 改助手的接法。改完**下一次开面板才生效**（Agent 实例要重建，见 ChatPane） */
+  setAgent: (patch: Partial<AgentSettings>) => void;
+  setAgentPane: (v: boolean) => void;
   setToken: (t: string) => void;
   setShowAll: (v: boolean) => void;
   setDrawer: (v: boolean) => void;
@@ -576,6 +608,8 @@ export const useStore = create<State>()(
       // 坚果云的地址留着默认那个（就是它家的 WebDAV 入口），账号和应用密码要用户填
       dav: { url: 'https://dav.jianguoyun.com/dav/QuitWriteRead', user: '', pass: '' },
       od: { token: '', basePath: 'QuitWriteRead' },
+      agent: { ...DEFAULT_AGENT },
+      agentPane: false,
       tagFilter: null,
       rightOpen: true,
       leftOpen: true,
@@ -734,6 +768,8 @@ export const useStore = create<State>()(
       setProvider: (id) => set({ provider: id }),
       setDav: (patch) => set({ dav: { ...get().dav, ...patch } }),
       setOd: (patch) => set({ od: { ...get().od, ...patch } }),
+      setAgent: (patch) => set({ agent: { ...get().agent, ...patch } }),
+      setAgentPane: (v) => set({ agentPane: v }),
 
       setToken: (t) => set({ token: t }),
       setShowAll: (v) => set({ showAll: v }),
@@ -1281,6 +1317,9 @@ export const useStore = create<State>()(
         provider: s.provider,
         dav: s.dav,
         od: s.od,
+        // ⚠️ `agent.apiKey` 跟 `token` 一个待遇：demo 阶段就在本机 localStorage，
+        // 正式版要进系统凭据库 —— 那一摊跟同步凭据是同一件事，别分开做两遍
+        agent: s.agent,
         side: s.side,
         lastBookId: s.lastBookId,
         editorFont: s.editorFont,
@@ -1295,6 +1334,17 @@ export const useStore = create<State>()(
 
 /** 当前打开的仓库。null = 还没选好（界面该出引导页） */
 let repoHandle: Repo | null = null;
+
+/**
+ * 活仓库句柄（`repo` 那个字段只是能存进 localStorage 的**引用**，不含句柄）。
+ *
+ * 给"要真读真写"的调用方用 —— 目前只有 AI 助手的工具层
+ * （`lib/agent/note-tools.ts`）。它拿到的就是界面正在用的那一个仓库，
+ * 所以助手读到的就是你屏幕上那堆 md，不存在第二份。
+ */
+export function currentRepo(): Repo | null {
+  return repoHandle;
+}
 
 /** 上次**已经落到仓库里**的那份文件表。每次存完跟 `files` 比一次，只写差异 */
 let lastFiles: FileMap = {};

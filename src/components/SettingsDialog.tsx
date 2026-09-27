@@ -8,7 +8,7 @@ import { hasDavTransport } from '../lib/providers';
 import { describeRef, isTauri } from '../lib/repo';
 import { describeScope } from '../lib/scope';
 import ReaderStyleFields from './ReaderStyleFields';
-import { Alert, BookOpen, Close, Cloud, FileText, FolderPlus, Info, Refresh } from './icons';
+import { Alert, BookOpen, Close, Cloud, FileText, FolderPlus, Info, Refresh, Sparkle } from './icons';
 
 /*
  * 设置对话框：**一张居中浮起的大卡**，左边一列分节，右边一节的内容。
@@ -30,6 +30,7 @@ import { Alert, BookOpen, Close, Cloud, FileText, FolderPlus, Info, Refresh } fr
 const TABS: { id: SettingsTab; label: string; hint: string }[] = [
   { id: 'general', label: '常规', hint: '仓库在哪、文件列表怎么列' },
   { id: 'sync', label: '推送', hint: '东西存在哪、推哪些、多久推一次' },
+  { id: 'agent', label: 'AI 助手', hint: '接哪家模型、要不要先演示' },
   { id: 'reading', label: '阅读', hint: '书的字体、字号、纸色' },
   { id: 'about', label: '关于', hint: '这个软件是什么' },
 ];
@@ -37,6 +38,7 @@ const TABS: { id: SettingsTab; label: string; hint: string }[] = [
 function IconOf({ id }: { id: SettingsTab }) {
   if (id === 'general') return <FileText size={13} />;
   if (id === 'sync') return <Cloud size={13} />;
+  if (id === 'agent') return <Sparkle size={13} />;
   if (id === 'reading') return <BookOpen size={13} />;
   return <Info size={13} />;
 }
@@ -153,6 +155,7 @@ export default function SettingsDialog() {
             <div data-settings-body className="min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-5">
               {tab === 'general' && <General />}
               {tab === 'sync' && <Sync />}
+              {tab === 'agent' && <Agent />}
               {tab === 'reading' && <Reading />}
               {tab === 'about' && <About />}
             </div>
@@ -710,6 +713,86 @@ function Sync() {
       </div>
 
       {meta && <p className="mt-2 text-[10.5px] leading-relaxed text-ink-3">{meta.hint}</p>}
+    </Section>
+  );
+}
+
+/* ── AI 助手：接哪家模型 ── */
+function Agent() {
+  const agent = useStore((s) => s.agent);
+  const setAgent = useStore((s) => s.setAgent);
+
+  return (
+    <Section
+      title="AI 助手"
+      intro="顶栏那颗星打开它。它能读你的笔记，但改不动 —— 内核那边只给了它三个只读工具（列出 / 读一篇 / 搜一段），写工具一个都没注册。"
+    >
+      <Toggle
+        id="agent-demo"
+        label="演示模式"
+        hint="不连模型、不用 Key，走一套写死的回合 —— 用来看链路通不通，不是看它聪不聪明"
+        on={agent.demo}
+        onChange={(v) => setAgent({ demo: v })}
+      />
+
+      {agent.demo ? (
+        <div data-agent-demo-notes className="mt-3 space-y-1 rounded-[10px] border border-line bg-surface-2 px-3 py-2.5 text-[11.5px] leading-relaxed text-ink-3">
+          <p>
+            演示模式会<b className="font-medium text-ink-2">真的去读你的仓库</b>：先列一遍笔记，
+            再读第一篇，最后那句话是写死的。
+          </p>
+          <p>它证明的是「工具真的被调用了、结果真的回到了模型眼前」，不是模型会说话。</p>
+        </div>
+      ) : (
+        <div className="mt-3 space-y-1.5">
+          <label className="block">
+            <span className="mb-[3px] block text-[11px] text-ink-3">接口地址</span>
+            <input
+              data-agent-baseurl
+              type="text"
+              value={agent.baseURL}
+              onChange={(e) => setAgent({ baseURL: e.target.value })}
+              placeholder="https://api.openai.com/v1"
+              className="w-full rounded-[8px] border border-line bg-surface-2 px-2.5 py-[7px] font-mono text-[11.5px] text-ink outline-none transition-colors placeholder:text-ink-3 focus:border-accent focus:bg-surface"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-[3px] block text-[11px] text-ink-3">API Key</span>
+            <input
+              data-agent-key
+              type="password"
+              value={agent.apiKey}
+              onChange={(e) => setAgent({ apiKey: e.target.value })}
+              placeholder="sk-…"
+              className="w-full rounded-[8px] border border-line bg-surface-2 px-2.5 py-[7px] font-mono text-[11.5px] text-ink outline-none transition-colors placeholder:text-ink-3 focus:border-accent focus:bg-surface"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-[3px] block text-[11px] text-ink-3">模型</span>
+            <input
+              data-agent-model
+              type="text"
+              value={agent.model}
+              onChange={(e) => setAgent({ model: e.target.value })}
+              placeholder="gpt-4o-mini"
+              className="w-full rounded-[8px] border border-line bg-surface-2 px-2.5 py-[7px] font-mono text-[11.5px] text-ink outline-none transition-colors placeholder:text-ink-3 focus:border-accent focus:bg-surface"
+            />
+          </label>
+          <Hint>
+            走的是 OpenAI 兼容那一套（<span className="font-mono">/chat/completions</span>），
+            换国内几家改地址就行。⚠️ 浏览器直连要端点放行 CORS ——
+            不放行的会连不上，那种情况得用桌面端（那边的请求可以走本地代理）。
+          </Hint>
+        </div>
+      )}
+
+      <div className="mt-4 border-t border-line pt-3">
+        <Hint>
+          Key 现在跟同步的 token 一个待遇：存在本机 localStorage（demo 阶段），
+          正式版要进系统凭据库。改完这几项<b className="font-medium text-ink-2">下次打开助手才生效</b>
+          —— 模型是建实例那会儿就定死的，改了不重建等于没改。
+        </Hint>
+      </div>
     </Section>
   );
 }

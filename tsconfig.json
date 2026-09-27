@@ -13,7 +13,18 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    "paths": {
+      "node:path": ["./src/lib/agent/shims/node-path.ts"],
+      "node:os": ["./src/lib/agent/shims/node-os.ts"],
+      "node:crypto": ["./src/lib/agent/shims/node-crypto.ts"],
+      "node:url": ["./src/lib/agent/shims/node-url.ts"],
+      "node:fs": ["./src/lib/agent/shims/node-fs.ts"],
+      "node:fs/promises": ["./src/lib/agent/shims/node-fs-promises.ts"],
+      "node:child_process": ["./src/lib/agent/shims/node-child-process.ts"],
+      "node:readline": ["./src/lib/agent/shims/node-readline.ts"],
+      "node:stream": ["./src/lib/agent/shims/node-stream.ts"]
+    }
   },
   "include": ["src", "vite.config.ts"]
 }

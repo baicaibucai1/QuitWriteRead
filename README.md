@@ -328,6 +328,41 @@ OneDrive 给 quickXorHash，算法跟本地不同 —— 直接拿来当基线�
 前缀替换会当场把整棵子树绕成一个环。拖动的手感（6px 阈值、只认鼠标和笔、
 手指在 Android 上会把长按让给系统菜单）在 `components/FileTree.tsx` 里。
 
+## AI 助手
+
+顶栏那颗星打开它。它能**读**你的笔记，**改不动** —— 这不是"先不给写权限"，是内核那边
+只注册了三个只读工具（`list_notes` / `read_note` / `search_notes`），写工具一个都没装。
+
+### 为什么要 vendored 一个内核，而不是自己写个循环
+
+自己写一个 `while (模型还没说 stop) { 调工具; 拼回去 }` 看着是两百行的事，真正的开销在后面：
+并行工具调用、参数校验、权限、上下文压缩、预算（步数 / token / 墙钟三重）、流式断在半句上要重发、
+子代理。这些**每一条都是踩过才知道的**，而且它们互相咬着（压缩会动 transcript，权限要跟着工具走）。
+内核把这些做完了，我们要写的是**工具层 + 渲染层**：
+
+- **工具层**只有 `note-tools.ts` 一个文件，底下是早就存在的 `Repo`；
+- **渲染层**只有 `ChatPane.tsx` 一个文件，抄的是 `docs/events.md` 里那份现成 reducer。
+
+### 三条把"它不该干什么"钉死在代码里的规矩
+
+1. **不给文件系统**：`builtinTools: false`，记忆 / 技能 / MCP 全关。
+   内核那套自带 `read_file` / `write_file` 靠 `node:fs`，浏览器端**不存在**（已经连文件一起删掉了）。
+   就算存在也不该给 —— 那等于把整个家目录交给模型。
+2. **路径天然出不去**：工具走 `Repo`，而 `lib/repo.ts` 的硬规矩①就是
+   「绝对路径不许进这个接口」。所以沙箱不用再兜一层正则。
+3. **规则走 `injectedPrompts` 而不是 system prompt**：这条通道**不进 transcript**，
+   压缩 / 裁剪 / 模型跑偏都动不了它 —— 是内核里唯一能保证"每一步都看见"的路子。
+
+### 演示模式
+
+不连模型、不用 Key，走 `MockProvider` 的两步脚本：先 `list_notes` 列出仓库，
+再 `read_note` 读第一篇，最后一句是写死的。**工具是真的、读的是你那堆 md**，
+假的只有"最后那句话是谁说的"。它的用处是：没有 Key 也能一眼看出链路通不通。
+
+想接真模型就把演示关掉，填接口地址 / Key / 模型（OpenAI 兼容那套 `/chat/completions`，
+换国内几家改地址就行）。⚠️ 浏览器直连要端点放行 CORS；不放行的得用桌面端
+（那边的请求可以走本地代理 —— 内核留了 `fetch` 注入口，就是为这个）。
+
 ## 还没做
 
 - **打真正的包**：Android apk 和 Windows exe 都还没出。缺 JDK / Android SDK+NDK / MSVC 工具链，
@@ -388,7 +423,8 @@ node tests/import-e2e.mjs         # 浏览器：选文件导入 → **GBK 解出
 node tests/rename-e2e.mjs         # 浏览器：右键菜单 → 就地改名（双链 + 正文标题跟着改）→ 拖动换层级（含悬停展开折叠目录）→ 属性 → 复制 78 例
 node tests/layout-e2e.mjs         # 浏览器：右栏常驻 → 大纲 → 关系面板 → 左栏搜索 → 待同步清单收起 / 展开 → 右栏收起 / 展开走**顶栏**那颗（收起 = 整列消失）→ 左栏同理 → 同步在状态栏 + A± 调编辑器字号 → **两侧边栏拖宽度（含上限 / 双击复位 / 刷新记住 / 手机上没有）** → 手机视口 64 例
 node tests/smoke.mjs              # 浏览器：拉取 → 打开文章 → 创建笔记 → md 工具栏 → 截图
-node tests/settings-e2e.mjs       # 设置对话框 48 例（入口在左下角 / 居中大卡 + 左列分节 / 凭据跟着后端走 / 后端不放假按钮 / 阅读节改一处读处跟着变 / Esc 与点遮罩 / 手机铺满 / 壁纸已移除）
+node tests/settings-e2e.mjs       # 设置对话框 60 例（入口在左下角 / 居中大卡 + 左列分节 / 凭据跟着后端走 / 后端不放假按钮 / **AI 助手节默认演示、不放假输入框** / 阅读节改一处读处跟着变 / Esc 与点遮罩 / 手机铺满 / 壁纸已移除）
+node tests/agent-e2e.mjs          # 浏览器：**AI 助手真跑一遍内核** 21 例（入口唯一 / 事件流 / `list_notes`→`read_note` 读的是仓库里那一篇的正文 / 没有工具要审批 / Esc / 零报错）
 node tests/mobile-e2e.mjs         # 手机视口 58 例（抽屉 / 工具栏横滚 / 触摸尺寸 / 顶栏精简 / 同步钮在状态栏 / 手机壳页 / 桌面不回归）
 node tests/pwa-e2e.mjs            # 产物上的 PWA 15 例（SW 注册 → 断开网络仍能打开）
 node tests/lazy-e2e.mjs           # 编辑器按需加载 21 例（入口包里没有编辑器 / 首屏不拉 / 加载中给骨架）
@@ -630,6 +666,12 @@ SW 和 HTTP 缓存的隔离边界都是 origin，换端口就等于换了一整�
 | `src/lib/bookdb.ts` | 书架的 IndexedDB：书目 / 字节 / 进度 / 排版偏好 / **批注**（按 `bookId` 建索引；删书连批注一起清）。**书不进 `files`、不参与同步** |
 | `src/lib/anchors.ts` | 批注的位置：**记纯文本偏移，不记 DOM 节点**（DOM 会被搜索高亮拆了又合，节点序号靠不住）。两端换算都在这儿 |
 | `src-tauri/` | 桌面端骨架。目前只提供 `dav_request`：让坚果云绕开 CORS |
+| `src/lib/agent/core/` | **vendored 的 agent 内核**（`nosie-agent-core`，MIT，v0.2.0）。原样搬进来后再做浏览器化：删掉 cli / sidecar / MCP / 文件记忆 / JSONL 会话 / fs+shell 工具，剩下循环、权限、压缩、预算那半（纯逻辑）。⚠️ 它是**第三方代码**，改之前先看 `src/lib/agent/index.ts` 文件头那三条装配原则 |
+| `src/lib/agent/shims/` | 内核要的 Node 内置在浏览器里的替身。`path` / `os` / `crypto` / `url` 是**真实现**；`fs` / `child_process` / `readline` / `stream` **调到就抛**（静默返回空数据会让"内核以为自己写了文件"这种事故查不出来） |
+| `src/lib/agent/note-tools.ts` | 助手能用的工具：**三个只读**（列出 / 读一篇 / 搜一段），底下是 `Repo` —— 仓库内相对路径，出不去。所以"沙箱"在这儿是天然的，不需要再兜一层路径检查 |
+| `src/lib/agent/index.ts` | 装配处：polyfill 必须最前、不给文件系统、模型请求走可注入的 `fetch`（桌面端可换 Rust 代理绕 CORS + 护 Key） |
+| `src/lib/agent/demo.ts` | 演示模式的 `MockProvider`：两步真工具 + 一句写死的话。**验的是链路通不通，不是模型聪不聪明** |
+| `src/components/ChatPane.tsx` | 助手面板（懒加载，内核那 104 kB 不进首屏）。把事件流画出来：`text_reset` 是**清空**不是出错；工具卡按 `toolCallId` 记 |
 | `src/lib/sync.ts` | 对外动作的编排：**只推**（`pushOnce`）/ **只拉指定的几篇**（`pullOnce`）/ **选边**（`resolveConflict`）；比对先按推送范围收窄，删远端一律要人点头 |
 | `src/lib/store.ts` | Zustand 状态（本地工作副本 + 快照）。**异步操作带序号，防止旧操作覆盖新状态**；`side`（书写 / 阅读在哪边）与 `lastBookId`（上次读的那本）持久化，`currentBook` 不持久化 —— 重开先回书架 |
 | `src/components/EditorShell.tsx` | 编辑器外壳（台面 → 纸面 → 路径栏 / 模式开关 / 面包屑）。**必须留在主包里** |

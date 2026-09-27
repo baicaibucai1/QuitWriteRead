@@ -374,6 +374,8 @@ node tests/links.test.mjs         # 双链与标签 97 例（解析 / 代码块�
 node tests/rename.test.mjs        # 改名与搬家 89 例（名字净化 / 子树换前缀 / 重名与"拖进自己"拦截 / 双链改写 / 保形改写 / 标题联动）
 node tests/binary.test.mjs        # 附件 54 例（后缀判定 / base64 往返 / 大块不爆栈 / 字节指纹 / ![[嵌入]] 解析）
 node tests/embed.test.mjs         # 嵌正文 25 例（防环 / 自嵌 / 深度上限 / 标题降级 / 转义 / 只读链接）
+node tests/scope.test.mjs         # 推送范围 42 例（`**` / `*.md` / `thoughts/` / 单篇；**排除先看**；空 = 什么都不推）
+node tests/diff.test.mjs          # 行级 diff 25 例（LCS / 摘要 / 长段折叠；超 2000 行退化成整块替换）
 node tests/readerstyle.test.mjs   # 阅读排版守卫 35 例（选项表自洽 / 脏值归一 / 字号夹边界 / 坏 id 退第一档）
 node tests/epub.test.mjs          # epub 解析 44 例（真造 zip：container→opf→spine 三套坐标系 / nav / ncx / 兜底目录 / 坏书 / 去标签 / 书内搜索）
 node tests/repo-e2e.mjs           # 浏览器：仓库落在哪 → 建了就进仓库 → 刷新还在 → **localStorage 里没有第二份 files** → 改名后旧路径消失 → 删了就没 → 设置页照实说 21 例（DEV-only）
@@ -390,6 +392,7 @@ node tests/settings-e2e.mjs       # 设置对话框 48 例（入口在左下角 
 node tests/mobile-e2e.mjs         # 手机视口 58 例（抽屉 / 工具栏横滚 / 触摸尺寸 / 顶栏精简 / 同步钮在状态栏 / 手机壳页 / 桌面不回归）
 node tests/pwa-e2e.mjs            # 产物上的 PWA 15 例（SW 注册 → 断开网络仍能打开）
 node tests/lazy-e2e.mjs           # 编辑器按需加载 21 例（入口包里没有编辑器 / 首屏不拉 / 加载中给骨架）
+node tests/push-e2e.mjs           # 浏览器：推送范围能配能删能回读 → 范围空了自己说话 → 定时是真控件 → **拉取是人选的**（能搜 / 不勾不给拉）→ 冲突给得出差异且三个按钮写清谁覆盖谁 → **设置里「远端仓库」那一块**（坐标 / 状态灯 / 结论 / 去 GitHub 打开 / 试一下）42 例（DEV-only）
 node tests/push-roundtrip.mjs     # 端到端：新建 → 推送 → 删除 → 确认 → 再推送（会真的动仓库）
 node scripts/gen-icons.mjs        # 重新生成主屏图标（用本机 Edge 渲染，不引原生依赖）
 ```
@@ -412,6 +415,25 @@ node scripts/gen-icons.mjs        # 重新生成主屏图标（用本机 Edge �
 `push-roundtrip.mjs` **每一步都有断言，不符预期就 exit 1**（它原来只 `console.log`，
 网络一抖就"假绿"：顶栏写着「与远端一致」、远端文件还在，脚本照样退出 0）。
 它开头先探一次 `api.github.com`，网络不通就直接告诉你"这是环境问题，别在这条线索上查 bug"。
+
+### 「零报错」到底数谁：应用自己的，还是网络替它记的
+
+浏览器会把**任何一次失败的网络请求**自动记成 console error
+（`Failed to load resource: the server responded with a status of 404 ()`）——
+这跟页面代码写没写错**无关**：只要真去问了远端（启动那次比对、设置里探测），
+而那个仓库此刻不存在 / 没权限 / 网络不通，就必然有一条。于是这条断言会变成抽签。
+
+所以判法收在 **`tests/remote-noise.mjs`**（所有套件共用，别一个套件一个写法）：
+
+- **算失败**：`pageerror`，以及来自开发服务器自己的 console error（本地 js / css 加载不出来、自己的接口 500）
+- **不算失败**：第三方域（api.github.com）的资源加载失败 —— 结尾单独打一行「远端网络噪声 N 条」
+- 位置 URL 拿不到时**一律算失败**：宁可红一条让人来看，也不放过一个说不清来源的报错
+
+仓库通不通由**界面**去说（设置 → 推送 → 「远端仓库」那一块：状态灯 + 一句结论 + 「试一下」），
+不由这条断言说。⚠️ 别用「文本里含不含 404 / 401」来判 —— 那会连**应用自己的**接口错误一起赦免。
+
+配套的一条：`lib/gh.ts` 把 `404 Not Found` 这种话翻成能指导下一步的说法
+（401 token 失效 / 403 没权限 / 404 仓库或分支不存在或 token 看不见 / 409 远端还是空的 / 5xx 等一会）。
 
 几个脚本在 `chromium.launch` 之前会**清掉 `http_proxy` 等环境变量**并带 `--no-proxy-server`（坑 3）。
 `smoke.mjs` 在左侧没有 md 时会跳过「打开 / 源码」两节，好让**纯本地的「创建笔记」在断网时也测得到**。

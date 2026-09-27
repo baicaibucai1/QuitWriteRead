@@ -393,9 +393,56 @@ function Sync() {
   const autoPush = useStore((s) => s.autoPush);
   const autoPushMin = useStore((s) => s.autoPushMin);
   const setAutoPush = useStore((s) => s.setAutoPush);
+  const probe = useStore((s) => s.remoteProbe);
+  const probeRemote = useStore((s) => s.probeRemote);
 
   const davReachable = hasDavTransport();
   const meta = PROVIDERS.find((p) => p.id === provider);
+
+  /*
+   * 凭据填了 ≠ 连得上，所以这里算的是「**有没有资格去连**」：
+   * 坚果云在浏览器版即使填满了也连不通（没有 CORS），那种情况算没资格，
+   * 于是按钮是禁用的、文案直接说"要用桌面端" —— 不给一个按了必然失败的按钮。
+   */
+  const credReady =
+    provider === 'github'
+      ? !!token
+      : provider === 'nutstore'
+        ? !!(dav.user && dav.pass) && davReachable
+        : !!od.token;
+
+  /** 连的是哪儿（一行字说清坐标） */
+  const where =
+    provider === 'github'
+      ? `${OWNER}/${REPO} @ ${BRANCH}`
+      : provider === 'nutstore'
+        ? dav.url || '（还没填 WebDAV 地址）'
+        : `OneDrive / ${od.basePath || '根目录'}`;
+  const ghUrl = provider === 'github' ? `https://github.com/${OWNER}/${REPO}` : '';
+
+  const verdict = !credReady
+    ? provider === 'nutstore' && !davReachable
+      ? '浏览器版连不上：坚果云的 WebDAV 不带 CORS 头，得用桌面端'
+      : '还没连上 —— 先把上面的凭据填好'
+    : probe.state === 'probing'
+      ? '正在连…'
+      : probe.state === 'ok'
+        ? `已连上 · 远端 ${probe.count} 个文件${probe.at ? ` · ${probe.at} 试过` : ''}`
+        : probe.state === 'error'
+          ? `连不上：${probe.message ?? '未知原因'}`
+          : '还没试过';
+
+  /*
+   * 能连了就去试一次 —— 打开这一屏就是为了看"现在到底通不通"，
+   * 让人自己点一下才知道不通，等于没说。
+   * ⚠️ 依赖里**不能有 token**（逐字写入会每个字符打一次远端）；
+   * 只在"从不能连到能连"和换后端时各试一次。
+   */
+  useEffect(() => {
+    if (!credReady) return;
+    void probeRemote();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [credReady, provider]);
 
   return (
     <Section
@@ -517,6 +564,60 @@ function Sync() {
           />
         </div>
       )}
+
+      {/*
+        ── 连的是哪个仓库、通不通 ──
+        以前这一屏只有"上次同步 XX:XX"，人看不出**连的到底是哪**、更看不出"其实没连上"。
+        凭据填了 ≠ 连得上（token 过期、仓库改名、网盘路径写错、浏览器被 CORS 拦），
+        所以这两件事在这里分开说，并且给一颗"试一下"让他当场验证。
+      */}
+      <div data-remote-status className="mt-3 border-t border-line pt-2.5">
+        <div className="flex items-start gap-2">
+          <span
+            data-remote-dot={probe.state}
+            className={`mt-[5px] h-2 w-2 shrink-0 rounded-full ${
+              probe.state === 'ok'
+                ? 'bg-ok'
+                : probe.state === 'error'
+                  ? 'bg-danger'
+                  : probe.state === 'probing'
+                    ? 'animate-pulse bg-ink-3'
+                    : 'bg-line-2'
+            }`}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="text-[12.5px] font-medium text-ink">远端仓库</div>
+            <div data-remote-where className="mt-[1px] truncate font-mono text-[11px] text-ink-3">
+              {where}
+            </div>
+            <div data-remote-verdict className="mt-[2px] text-[11px] leading-snug text-ink-3">
+              {verdict}
+            </div>
+            {ghUrl && (
+              <a
+                data-remote-link
+                href={ghUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-1 inline-block text-[11px] text-accent underline"
+              >
+                在 GitHub 上打开
+              </a>
+            )}
+          </div>
+          <button
+            type="button"
+            data-remote-probe
+            disabled={probe.state === 'probing' || !credReady}
+            title={credReady ? '真去远端列一次目录' : '先填好凭据'}
+            onClick={() => void probeRemote()}
+            className="inline-flex shrink-0 items-center gap-1 rounded-[8px] border border-line bg-surface-2 px-2 py-[5px] text-[11.5px] text-ink-2 transition-colors hover:bg-surface-3 hover:text-ink disabled:opacity-40 disabled:pointer-events-none"
+          >
+            <Refresh size={11.5} className={probe.state === 'probing' ? 'animate-spin' : ''} />
+            {probe.state === 'probing' ? '正在连' : '试一下'}
+          </button>
+        </div>
+      </div>
 
       {/*
         ── 推哪些 ──

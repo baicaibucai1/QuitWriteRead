@@ -13,6 +13,7 @@
 //   ④ 不是 md 的文件被挡下，并且**告诉你挡了**（静默跳过等于文件凭空消失）。
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
+import { watchConsole } from './remote-noise.mjs';
 
 for (const k of ['http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']) {
   delete process.env[k];
@@ -52,11 +53,12 @@ fs.writeFileSync(`${TMP}/封面.png`, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d,
 const browser = await chromium.launch({ channel: 'msedge', headless: true, args: ['--no-proxy-server'] });
 const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
 
-const errors = [];
-page.on('console', (m) => {
-  if (m.type() === 'error' && !m.text().includes('401')) errors.push(m.text().slice(0, 200));
-});
-page.on('pageerror', (e) => errors.push('pageerror: ' + e.message.slice(0, 200)));
+/*
+ * 「零报错」只数**应用自己**的：pageerror + 来自开发服务器的 console error。
+ * 第三方（api.github.com）那几条是浏览器替网络记的账 —— 仓库在不在、通不通
+ * 由设置里「远端仓库」那一块说，不由这条断言说。判法见 ./remote-noise.mjs。
+ */
+const { errors, noise } = watchConsole(page);
 
 const seed = () =>
   page.evaluate(() =>
@@ -182,6 +184,7 @@ step('把文件拖进列表：也能导入');
 
 step('收尾');
 ok('零报错', errors.length === 0, errors.join(' | '));
+if (noise.length) console.log(`  · 远端网络噪声 ${noise.length} 条（不算失败 —— 仓库通不通看设置里「远端仓库」那块）`);
 
 console.log('\n结果：' + pass + ' 通过 / ' + bad.length + ' 失败');
 if (bad.length) console.log('失败项：' + bad.join('；'));

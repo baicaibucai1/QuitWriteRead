@@ -444,6 +444,23 @@ type State = {
   remotePane: boolean;
   setRemotePane: (v: boolean) => void;
   /**
+   * 「连得上吗」的实测结果。**不持久化** —— 它是这一刻的事实，重开就该重新问一次。
+   * ⚠️ 跟 `credReady`（凭据填没填）是两件事：填了凭据也可能连不上
+   * （token 过期、仓库改名、网盘路径写错、浏览器被 CORS 拦）。
+   * 界面上必须把这两件分开说，否则用户会觉得"我明明填了，怎么还说没连上"。
+   */
+  remoteProbe: {
+    state: 'unknown' | 'probing' | 'ok' | 'error';
+    /** 连上时远端有几个文件 */
+    count: number;
+    /** 连不上的原因（原样交给界面，别替它润色 —— 真实报错才好排查） */
+    message: string | null;
+    /** 上次实测的时刻 */
+    at: string | null;
+  };
+  /** 真去远端列一次目录，把结果记进 `remoteProbe`。失败只记录，不弹错 —— 这是"问一句"，不是动作 */
+  probeRemote: () => Promise<void>;
+  /**
    * 正在选边的那篇（两边都改过的）。**不持久化**。
    * 连同它一起存的是**云端那一版的正文** —— 差异要拿着两版才画得出来，
    * 而远端内容不该常驻在内存里（改一次就过期了）。
@@ -548,6 +565,7 @@ export const useStore = create<State>()(
       autoPushMin: 30,
       remoteFiles: {},
       remotePane: false,
+      remoteProbe: { state: 'unknown', count: 0, message: null, at: null },
       conflictOf: null,
       conflictRemote: null,
       conflictBusy: false,
@@ -1003,6 +1021,31 @@ export const useStore = create<State>()(
       },
 
       setRemotePane: (v) => set({ remotePane: v }),
+
+      probeRemote: async () => {
+        const { remote, remoteProbe } = get();
+        if (remoteProbe.state === 'probing') return; // 连点不出来两次请求
+        set({ remoteProbe: { ...remoteProbe, state: 'probing', message: null } });
+        const clock = () => new Date().toLocaleTimeString('zh-CN');
+        try {
+          /*
+           * ⚠️ 列目录对**网盘**是重活：它要先把内容取回来才能算指纹
+           * （见 providers/types.ts 里那条取舍）。所以这是人点的动作，
+           * 不做成自动轮询 —— 否则每隔几分钟下一次全部文件内容。
+           */
+          const entries = await remote().list();
+          const map: Record<string, string> = {};
+          for (const e of entries) map[e.path] = e.sha;
+          set({
+            remoteFiles: map,
+            remoteProbe: { state: 'ok', count: entries.length, message: null, at: clock() },
+          });
+        } catch (e) {
+          set({
+            remoteProbe: { state: 'error', count: 0, message: (e as Error).message, at: clock() },
+          });
+        }
+      },
 
       openConflict: async (path) => {
         const { remote } = get();

@@ -6,6 +6,7 @@
 // 浏览器不会按移动端处理，媒体查询和触摸行为都验不到。
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
+import { watchConsole } from './remote-noise.mjs';
 
 // Playwright 会把本机 http_proxy 透传进浏览器（端口每次还不一样）→ 必须清掉
 for (const k of ['http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']) {
@@ -63,10 +64,16 @@ const page = await browser.newPage({
   hasTouch: true,
   userAgent: ANDROID_UA,
 });
-page.on('console', (m) => {
-  if (m.type() === 'error') errors.push(m.text().slice(0, 200));
-});
-page.on('pageerror', (e) => errors.push('pageerror: ' + e.message.slice(0, 200)));
+/*
+ * 「零报错」只数**应用自己**的：pageerror + 来自开发服务器的 console error。
+ * 第三方（api.github.com）那条是浏览器替网络记的账 —— 仓库通不通由设置里
+ * 「远端仓库」那一块说，不由这条断言说。判法见 ./remote-noise.mjs。
+ *
+ * ⚠️ 这里**沿用上面那个 `errors`**：底下还有别的页面（桌面视口那几个）往里推
+ * pageerror，换成新数组会把它们的账丢掉。
+ */
+const noise = [];
+watchConsole(page, { errors, noise });
 
 await page.goto(URL, { waitUntil: 'domcontentloaded' });
 await page.waitForTimeout(2200);
@@ -373,4 +380,5 @@ if (errors.length) {
   for (const e of errors.slice(0, 8)) console.log('    ! ' + e);
 }
 console.log(`  截图在 ${OUT}`);
+if (noise.length) console.log(`  远端网络噪声 ${noise.length} 条（不算失败 —— 仓库通不通看设置里「远端仓库」那块）`);
 process.exit(bad.length || errors.length ? 1 : 0);

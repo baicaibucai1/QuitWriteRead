@@ -57,6 +57,22 @@ async function doFetch(url: string, init?: RequestInit): Promise<Response> {
   }
 }
 
+/**
+ * 「404 Not Found」这种话看不懂也无从下手，翻成能指导下一步的说法。
+ *
+ * ⚠️ 只翻**这条链路上会撞到的**那几个码，别贪多：写错一句指引比不写更坑人
+ * （比如 404 说成"仓库不存在"，实际是"私有仓库这个 token 看不见"——
+ * 所以那句要把两种可能都写上）。
+ */
+function httpHint(status: number): string {
+  if (status === 401) return 'token 不对或已经失效（重填一次）';
+  if (status === 403) return '没权限 —— 私有仓库要勾上 repo 权限，也可能是撞了接口限流';
+  if (status === 404) return '仓库或分支不存在，也可能是个私有仓库而这个 token 看不见它';
+  if (status === 409) return '远端还是空的（一次都没提交过就没有分支可读）';
+  if (status >= 500) return `GitHub 那边 ${status} 了，等一会儿再试`;
+  return '';
+}
+
 async function ghFetch<T>(cfg: GhConfig, path: string, init?: RequestInit): Promise<T> {
   const res = await doFetch(API + path, {
     ...init,
@@ -75,7 +91,9 @@ async function ghFetch<T>(cfg: GhConfig, path: string, init?: RequestInit): Prom
     } catch {
       detail = (await res.text().catch(() => '')).slice(0, 200);
     }
-    throw new GhError(res.status, `${res.status} ${detail || res.statusText}`);
+    const hint = httpHint(res.status);
+    const raw = detail || res.statusText;
+    throw new GhError(res.status, hint ? `${res.status} ${hint}（${raw}）` : `${res.status} ${raw}`);
   }
   return (await res.json()) as T;
 }

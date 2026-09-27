@@ -17,6 +17,7 @@
 import { createRequire } from 'node:module';
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { watchConsole } from './remote-noise.mjs';
 
 for (const k of ['http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']) {
   delete process.env[k];
@@ -103,11 +104,12 @@ if (!existsSync(join(ROOT, 'dist/assets'))) {
 
 // ==================== ②③ 运行时 ====================
 const browser = await chromium.launch({ channel: 'msedge', headless: true, args: ['--no-proxy-server'] });
-const errors = [];
-const watch = (page) => {
-  page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text().slice(0, 200)); });
-  page.on('pageerror', (e) => errors.push('pageerror: ' + e.message.slice(0, 200)));
-};
+/* 「零报错」只数**应用自己**的：pageerror + 来自开发服务器的 console error。
+ * 第三方（api.github.com）那条是浏览器替网络记的账 —— 判法见 ./remote-noise.mjs。
+ * ⚠️ 一个套件会连开好几个页面，所以账收在同一个 sink 里。 */
+const sink = { errors: [], noise: [] };
+const { errors, noise } = sink;
+const watch = (page) => watchConsole(page, sink);
 
 step(`运行时（构建产物 ${PREVIEW}）`);
 {
@@ -182,4 +184,6 @@ if (bad.length) {
   for (const b of bad) console.log('  ✗ ' + b);
   process.exit(1);
 }
+if (noise.length) console.log(`
+远端网络噪声 ${noise.length} 条（不算失败 —— 仓库通不通看设置里「远端仓库」那块）`);
 process.exit(errors.length ? 1 : 0);

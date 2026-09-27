@@ -13,6 +13,7 @@
 //   · 目录改名后，折叠状态和"新笔记落点"指的还是旧路径吗？
 // 纯函数再绿也证明不了这些 —— 它们全是跨状态的连线。
 import { createRequire } from 'node:module';
+import { watchConsole } from './remote-noise.mjs';
 
 for (const k of ['http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']) {
   delete process.env[k];
@@ -40,12 +41,12 @@ const context = await browser.newContext({ viewport: { width: 1400, height: 900 
 await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: URL });
 const page = await context.newPage();
 
-const errors = [];
-page.on('console', (m) => {
-  // 401 是 .env.local 里那个 token 过期了（页面启动会自动比对一次），跟本次改动无关
-  if (m.type() === 'error' && !m.text().includes('401')) errors.push(m.text().slice(0, 200));
-});
-page.on('pageerror', (e) => errors.push('pageerror: ' + e.message.slice(0, 200)));
+/*
+ * 「零报错」只数**应用自己**的：pageerror + 来自开发服务器的 console error。
+ * 第三方（api.github.com）那几条是浏览器替网络记的账 —— 仓库在不在、通不通
+ * 由设置里「远端仓库」那一块说，不由这条断言说。判法见 ./remote-noise.mjs。
+ */
+const { errors, noise } = watchConsole(page);
 
 const files = () => page.evaluate(() => window.__suisui.getState().files);
 const current = () => page.evaluate(() => window.__suisui.getState().current);
@@ -437,6 +438,7 @@ await page.waitForTimeout(600);
 
 step('控制台');
 ok('零报错', errors.length === 0, errors.slice(0, 3).join(' | '));
+if (noise.length) console.log(`  · 远端网络噪声 ${noise.length} 条（不算失败 —— 仓库通不通看设置里「远端仓库」那块）`);
 
 await browser.close();
 console.log(`\n结果：${pass} 通过 / ${bad.length} 失败`);

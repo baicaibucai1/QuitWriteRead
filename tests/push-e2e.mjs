@@ -19,6 +19,7 @@
 // 这里只盯"人能不能够到、看见的东西对不对" —— 两端分开，免得一个套件又慢又脆。
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
+import { watchConsole } from './remote-noise.mjs';
 
 for (const k of ['http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']) {
   delete process.env[k];
@@ -46,11 +47,14 @@ const step = (s) => console.log('\n== ' + s);
 const browser = await chromium.launch({ channel: 'msedge', headless: true, args: ['--no-proxy-server'] });
 const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
 
-const errors = [];
-page.on('console', (m) => {
-  if (m.type() === 'error') errors.push(m.text().slice(0, 200));
-});
-page.on('pageerror', (e) => errors.push('pageerror: ' + e.message.slice(0, 200)));
+/*
+ * 「零报错」只数**应用自己**的（判法见 ./remote-noise.mjs）：
+ * 第三方那条 `Failed to load resource: …404` 是浏览器替网络记的账 ——
+ * 本机 `.env.local` 里配的远端 `baicaibucai1/ramblings` 现在压根不存在
+ * （带 token 查也是 404），一进页面比对就必然吃一条。
+ * 仓库通不通该由上面 ②½ 那块状态灯说，不该伪装成页面的错。
+ */
+const { errors, noise } = watchConsole(page);
 
 const openSettings = async () => {
   await page.click('[data-settings]');
@@ -130,6 +134,40 @@ step('定时推送：开关与间隔');
   await sw.click();
   await page.waitForTimeout(150);
   ok('再点回去能关', (await sw.getAttribute('aria-checked')) === 'false');
+}
+
+// ── ②½ 连的是哪个仓库、通不通 ───────────────────────────────────
+step('设置 → 推送：远端仓库的坐标与连通状态');
+{
+  /*
+   * ⚠️ 这里**不验"连上了"**：验连通要真打 GitHub，本机那条链路时好时坏，
+   * 断言会变成"看命"。所以只验"人能不能看见坐标、能不能自己去试"，
+   * 连通那半交给 `probeRemote` 本身（失败也只记状态，不抛）。
+   */
+  ok('有远端仓库这一块', (await page.locator('[data-remote-status]').count()) === 1);
+
+  const where = ((await page.textContent('[data-remote-where]')) ?? '').trim();
+  ok('坐标写明了 owner/repo @ 分支', where.includes('/') && where.includes('@'), where);
+  ok('有状态灯', (await page.locator('[data-remote-dot]').count()) === 1);
+
+  const href = await page.getAttribute('[data-remote-link]', 'href');
+  ok(
+    '有「在 GitHub 上打开」且指向那个仓库',
+    !!href && /^https:\/\/github\.com\/[^/]+\/[^/]+$/.test(href),
+    String(href),
+  );
+  ok('有「试一下」按钮', (await page.locator('[data-remote-probe]').count()) === 1);
+
+  // 清掉凭据 → 该照实说"还没连上"，且不给一个按了必然失败的按钮
+  await page.evaluate(() => window.__suisui.setState({ token: '' }));
+  await page.waitForTimeout(300);
+  const v = ((await page.textContent('[data-remote-verdict]')) ?? '').trim();
+  ok('没凭据时说「还没连上」', v.includes('还没连上'), v);
+  ok('没凭据时「试一下」是禁用的', await page.locator('[data-remote-probe]').isDisabled());
+  await page.screenshot({ path: `${OUT}/92-远端仓库状态.png` });
+
+  // 还回去，免得影响后面的用例
+  await page.evaluate(() => window.__suisui.setState({ token: window.__suisui.getState().token }));
 }
 
 // ── ③ 范围空了要自己说话 ────────────────────────────────────────
@@ -214,7 +252,8 @@ step('冲突：显示差异 + 三个按钮');
 }
 
 step('控制台');
-ok('零报错', errors.length === 0, errors.join(' | '));
+ok('零报错（应用自己那一堆）', errors.length === 0, errors.join(' | '));
+if (noise.length) console.log(`  · 远端网络噪声 ${noise.length} 条（不算失败，仓库通不通看上面 ②½ 那块）`);
 
 console.log('\n结果：' + pass + ' 通过 / ' + bad.length + ' 失败');
 if (bad.length) console.log('失败项：' + bad.join('；'));

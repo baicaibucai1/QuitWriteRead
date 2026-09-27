@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { BRANCH, OWNER, REPO, useStore } from '../lib/store';
 import type { SettingsTab } from '../lib/store';
@@ -6,6 +6,7 @@ import { PROVIDERS } from '../lib/providers';
 import type { ProviderId } from '../lib/providers';
 import { hasDavTransport } from '../lib/providers';
 import { describeRef, isTauri } from '../lib/repo';
+import { describeScope } from '../lib/scope';
 import ReaderStyleFields from './ReaderStyleFields';
 import { Alert, BookOpen, Close, Cloud, FileText, FolderPlus, Info, Refresh } from './icons';
 
@@ -28,7 +29,7 @@ import { Alert, BookOpen, Close, Cloud, FileText, FolderPlus, Info, Refresh } fr
 
 const TABS: { id: SettingsTab; label: string; hint: string }[] = [
   { id: 'general', label: '常规', hint: '仓库在哪、文件列表怎么列' },
-  { id: 'sync', label: '同步', hint: '东西存在哪、同步到哪' },
+  { id: 'sync', label: '推送', hint: '东西存在哪、推哪些、多久推一次' },
   { id: 'reading', label: '阅读', hint: '书的字体、字号、纸色' },
   { id: 'about', label: '关于', hint: '这个软件是什么' },
 ];
@@ -272,7 +273,108 @@ function General() {
   );
 }
 
-/* ── 同步：选后端 → 填凭据 → 就地同步 ── */
+/*
+ * ── 规则编辑器 ──
+ * 推送范围是用**手写的一行行字符串**表示的（见 lib/scope.ts），所以界面要做的
+ * 是让人看得见自己写了什么：一条规则一枚 chip，点 × 就删，输入框回车就加。
+ * ⚠️ 不做下拉选择：目录名是用户自己的，猜不出来，给个输入框比给十个选项有用。
+ */
+function RuleList({
+  id,
+  label,
+  hint,
+  values,
+  onChange,
+  placeholder,
+  presets,
+}: {
+  id: string;
+  label: string;
+  hint?: string;
+  values: string[];
+  onChange: (next: string[]) => void;
+  placeholder: string;
+  presets?: string[];
+}) {
+  const [draft, setDraft] = useState('');
+
+  const add = (raw: string) => {
+    /*
+     * 逗号分隔也认 —— 一次贴进来好几条是很常见的。
+     * ⚠️ 必须**先攒齐再一次 onChange**：`values` 是这一轮闭包里的旧数组，
+     * 循环里调两次 `onChange([...values, v])` 的话第二条会把第一条顶掉
+     * （实测：输入 `a.md, b.md` 只剩 b.md）。
+     */
+    const next = [...values];
+    for (const part of raw.split(',')) {
+      const v = part.trim();
+      if (!v || next.includes(v)) continue;
+      next.push(v);
+    }
+    if (next.length !== values.length) onChange(next);
+    setDraft('');
+  };
+
+  return (
+    <div data-rules={id} className="mt-2.5">
+      <div className="text-[12px] text-ink">{label}</div>
+      {hint && <div className="mt-[1px] text-[11px] leading-snug text-ink-3">{hint}</div>}
+
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+        {values.map((v) => (
+          <span
+            key={v}
+            data-rule={v}
+            className="flex max-w-full items-center gap-1 rounded-full border border-line bg-surface-2 py-[3px] pl-2 pr-1"
+          >
+            <span className="min-w-0 truncate font-mono text-[11px] text-ink">{v}</span>
+            <button
+              type="button"
+              data-rule-del={v}
+              title={`去掉 ${v}`}
+              onClick={() => onChange(values.filter((x) => x !== v))}
+              className="grid h-[15px] w-[15px] shrink-0 place-items-center rounded-full text-ink-3 transition-colors hover:bg-surface-3 hover:text-ink"
+            >
+              <Close size={9} strokeWidth={2.5} />
+            </button>
+          </span>
+        ))}
+        <input
+          data-rule-input={id}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault(); // 挡住默认动作，否则它会去提交这一屏
+            add(draft);
+          }}
+          onBlur={() => draft.trim() && add(draft)}
+          placeholder={placeholder}
+          className="min-w-[120px] flex-1 rounded-full border border-line bg-surface-2 px-2.5 py-[3px] font-mono text-[11px] text-ink outline-none transition-colors placeholder:font-sans placeholder:text-ink-3 focus:border-accent focus:bg-surface"
+        />
+      </div>
+
+      {presets && presets.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {presets.map((p) => (
+            <button
+              key={p}
+              type="button"
+              data-rule-preset={p}
+              disabled={values.includes(p)}
+              onClick={() => add(p)}
+              className="rounded-full border border-dashed border-line-2 px-2 py-[2px] font-mono text-[10.5px] text-ink-3 transition-colors hover:border-accent-line hover:text-ink-2 disabled:opacity-40 disabled:pointer-events-none"
+            >
+              + {p}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── 推送：选后端 → 填凭据 → 定范围与定时 → 就地推送 ── */
 function Sync() {
   const provider = useStore((s) => s.provider);
   const setProvider = useStore((s) => s.setProvider);
@@ -283,17 +385,22 @@ function Sync() {
   const token = useStore((s) => s.token);
   const setToken = useStore((s) => s.setToken);
   const busy = useStore((s) => s.busy);
-  const doSync = useStore((s) => s.doSync);
+  const doPush = useStore((s) => s.doPush);
   const lastSyncAt = useStore((s) => s.lastSyncAt);
   const changes = useStore((s) => s.changes);
+  const scope = useStore((s) => s.scope);
+  const setScope = useStore((s) => s.setScope);
+  const autoPush = useStore((s) => s.autoPush);
+  const autoPushMin = useStore((s) => s.autoPushMin);
+  const setAutoPush = useStore((s) => s.setAutoPush);
 
   const davReachable = hasDavTransport();
   const meta = PROVIDERS.find((p) => p.id === provider);
 
   return (
     <Section
-      title="同步"
-      intro="这一节决定东西存在哪儿 —— 它是整页里唯一「选错了会换地方」的一组设置。"
+      title="推送"
+      intro="这一节决定东西存在哪儿、推哪些、多久推一次 —— 它是整页里唯一「选错了会换地方」的一组设置。"
     >
       {/*
         没做完的后端一律 disabled + 标「待接入」—— 给一个按了没反应的按钮，
@@ -412,22 +519,92 @@ function Sync() {
       )}
 
       {/*
-        配完就地同步：选后端 → 填凭据 → 同步，三步都在这一屏里，
+        ── 推哪些 ──
+        这是「不全量」的开关。话要说满：范围外的文件**同步层完全看不见**，
+        取消勾选绝不等于删远端 —— 这条是整套设计里最容易让人误会的地方，
+        不解释清楚用户不敢勾，或者勾错了以为文件没了。
+      */}
+      <div data-scope-box className="mt-3 border-t border-line pt-2.5">
+        <div className="text-[12.5px] font-medium text-ink">推送范围</div>
+        <p className="mt-1 text-[11px] leading-relaxed text-ink-3">
+          只有范围内的文件参与比对。<b className="font-medium text-ink-2">范围外的文件同步这一层完全看不见</b>
+          —— 不比对、不进清单、不会推、也绝不会因为「没勾它」而被当成删除推上去。
+        </p>
+
+        <RuleList
+          id="include"
+          label="推这些"
+          hint="目录写 thoughts/，后缀写 *.md，单篇写 notes/a.md，** 是全推"
+          values={scope.include}
+          onChange={(include) => setScope({ ...scope, include })}
+          placeholder="thoughts/"
+          presets={['**', '*.md']}
+        />
+        <RuleList
+          id="exclude"
+          label="但不推这些"
+          hint="写完整路径。单篇例外放这儿，它比上面那条更优先"
+          values={scope.exclude}
+          onChange={(exclude) => setScope({ ...scope, exclude })}
+          placeholder="thoughts/私密.md"
+        />
+        <Hint>
+          现在等于：<b className="font-medium text-ink-2">{describeScope(scope)}</b>
+        </Hint>
+      </div>
+
+      {/*
+        ── 多久推一次 ──
+        ⚠️ 只在应用开着时：关了窗口就是一个普通网页，没有后台这一说（真要后台常驻
+        得进 Tauri 起定时器 + 托盘，那是另一件事）。所以开关上就得写明白。
+      */}
+      <div data-autopush-box className="mt-3 border-t border-line pt-2.5">
+        <Toggle
+          id="autopush"
+          label="定时推送"
+          hint="应用开着的时候，每隔下面这段时间自动推一次（没有改动就不动）"
+          on={autoPush}
+          onChange={(v) => setAutoPush(v)}
+        />
+        {autoPush && (
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            {[5, 15, 30, 60, 120].map((m) => (
+              <button
+                key={m}
+                type="button"
+                data-autopush-min={m}
+                data-on={autoPushMin === m ? '1' : '0'}
+                onClick={() => setAutoPush(true, m)}
+                className={`rounded-full border px-2.5 py-[3px] text-[11px] transition-colors ${
+                  autoPushMin === m
+                    ? 'border-accent-line bg-accent-soft font-medium text-accent'
+                    : 'border-line bg-surface-2 text-ink-2 hover:text-ink'
+                }`}
+              >
+                {m} 分钟
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/*
+        配完就地推送：选后端 → 填凭据 → 定范围，三步都在这一屏里，
         不用关掉面板再去找按钮（左下角 dock 上那颗一直在那儿）。
       */}
       <div className="mt-3 flex items-center gap-2 border-t border-line pt-2.5">
         <span data-sync-state className="min-w-0 flex-1 text-[11px] text-ink-3">
-          {lastSyncAt ? `上次同步 ${lastSyncAt}` : '还没同步过'}
+          {lastSyncAt ? `上次推送 ${lastSyncAt}` : '还没推送过'}
           {changes.length > 0 && ` · ${changes.length} 项差异待处理`}
         </span>
         <button
           data-sync-now
-          onClick={() => void doSync()}
+          onClick={() => void doPush()}
           disabled={busy !== null}
           className="inline-flex shrink-0 items-center gap-1 rounded-[8px] border border-line bg-surface-2 px-2.5 py-[5px] text-[11.5px] text-ink-2 transition-colors hover:bg-surface-3 hover:text-ink disabled:opacity-40 disabled:pointer-events-none"
         >
           <Refresh size={11.5} className={busy === 'sync' ? 'animate-spin' : ''} />
-          {busy === 'sync' ? '同步中' : '立即同步'}
+          {busy === 'sync' ? '推送中' : '立即推送'}
         </button>
       </div>
 

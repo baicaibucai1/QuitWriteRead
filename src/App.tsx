@@ -3,6 +3,8 @@ import FileTree from './components/FileTree';
 import Resizer from './components/Resizer';
 import ChangeList from './components/ChangeList';
 import SideDock from './components/SideDock';
+import RemotePane from './components/RemotePane';
+import ConflictPane from './components/ConflictPane';
 import RightPane from './components/RightPane';
 import DeleteBanner from './components/DeleteBanner';
 import { EditorLoading, EmptyState, BookEmptyState } from './components/EmptyState';
@@ -51,6 +53,12 @@ export default function App() {
   const repoReady = useStore((s) => s.repoReady);
   const repoNotice = useStore((s) => s.repoNotice);
   const setRepoNotice = useStore((s) => s.setRepoNotice);
+  const autoPush = useStore((s) => s.autoPush);
+  const autoPushMin = useStore((s) => s.autoPushMin);
+  const remotePane = useStore((s) => s.remotePane);
+  const setRemotePane = useStore((s) => s.setRemotePane);
+  const conflictOf = useStore((s) => s.conflictOf);
+  const closeConflict = useStore((s) => s.closeConflict);
   /*
    * 拖动中的临时宽度。**它只在按住的那一刻存在**：
    * 拖一次会跑出上百次 onResize，而每次写 store 都会触发 persist
@@ -92,6 +100,35 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [repoReady]);
 
+  /*
+   * 定时推送。**只在应用开着时** —— 关了窗口就是一个普通网页，没有后台这一说
+   * （真要后台常驻得进 Tauri 起定时器 + 托盘，那是另一件事，所以设置里写明了）。
+   *
+   * 三个闸门，缺一个都不推：
+   *   ① 仓库读完了（没读完时 `files` 是空的，推＝删远端）
+   *   ② 这一轮没有别的动作在跑（busy）
+   *   ③ **先比对再推** —— 直接用上一轮的 `changes` 会推到过期结论
+   *      （本地刚改过但没比对时，那份清单是旧的）
+   *
+   * ⚠️ 依赖里**不写 changes / busy**：它们每敲一下键盘都在变，带上它们定时器
+   * 会被反复重建，等于永远走不到点。所以里头用 `useStore.getState()` 现取。
+   */
+  useEffect(() => {
+    if (!autoPush || !token || !repoReady) return;
+    const timer = setInterval(() => {
+      void (async () => {
+        const s = useStore.getState();
+        if (s.busy || s.settings) return; // 设置面板开着时不动手 —— 别在人家改配置的当口推
+        await s.refreshPlan();
+        const now = useStore.getState();
+        if (now.busy) return;
+        if (!now.changes.some((c) => c.kind.startsWith('push'))) return; // 没有要推的就别打远端
+        await now.doPush();
+      })();
+    }, autoPushMin * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [autoPush, autoPushMin, token, repoReady]);
+
   // 仓库那边的一次性交代（迁移 / 暂存提醒）：几秒后自己收掉，不用人去点
   useEffect(() => {
     if (!repoNotice) return;
@@ -109,6 +146,26 @@ export default function App() {
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [drawer, setDrawer]);
+
+  // 两个浮层同理：Esc 收掉是第一直觉（设置面板自己管自己的 Esc）
+  useEffect(() => {
+    if (!remotePane) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setRemotePane(false);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [remotePane, setRemotePane]);
+
+  useEffect(() => {
+    if (!conflictOf) return;
+    const onKey = (e: KeyboardEvent) => {
+      // ⚠️ 选边这个面板 Esc 关掉是**不处理**，不是取消 —— 冲突还留在清单里，没有危险动作
+      if (e.key === 'Escape') closeConflict();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [conflictOf, closeConflict]);
 
   return (
     <div
@@ -286,6 +343,8 @@ export default function App() {
           <SettingsDialog />
         </Suspense>
       )}
+      {remotePane && <RemotePane />}
+      {conflictOf && <ConflictPane />}
       {/*
         仓库那边的交代（「把 N 篇老笔记搬进来了」/「现在只是暂存」）。
         压在状态栏上面一点点，几秒后自己消失 —— 它是个交代，不是个需要处理的任务。

@@ -60,6 +60,8 @@ export default function ChangeList() {
   const showAll = useStore((s) => s.showAll);
   const setShowAll = useStore((s) => s.setShowAll);
   const setCurrent = useStore((s) => s.setCurrent);
+  const scope = useStore((s) => s.scope);
+  const openConflict = useStore((s) => s.openConflict);
 
   const { visible, hidden } = useMemo(() => {
     if (showAll) return { visible: changes, hidden: 0 };
@@ -70,6 +72,8 @@ export default function ChangeList() {
   const push = changes.filter((c) => c.kind.startsWith('push')).length;
   const pull = changes.filter((c) => c.kind.startsWith('pull')).length;
   const conflict = changes.filter((c) => c.kind === 'conflict').length;
+  /** 范围空了 = 什么都推不上去。这时候说「一致」是撒谎，得单独说 */
+  const emptyScope = scope.include.length === 0;
 
   // 清单默认收着，点抬头那一行才展开。这是**界面**状态，不进 store：
   // 换篇笔记、刷新一次都不该替他改主意。
@@ -124,13 +128,13 @@ export default function ChangeList() {
               strokeWidth={2}
               className={`shrink-0 text-ink-3 transition-transform ${open ? 'rotate-90' : ''}`}
             />
-            <span className="eyebrow shrink-0">待同步</span>
+            <span className="eyebrow shrink-0">待推送</span>
             {status}
             {!open && <span className="shrink-0 text-[10.5px] text-ink-3">{changes.length} 项</span>}
           </button>
         ) : (
           <>
-            <span className="eyebrow shrink-0">待同步</span>
+            <span className="eyebrow shrink-0">待推送</span>
             {status}
           </>
         )}
@@ -141,15 +145,30 @@ export default function ChangeList() {
       {(!hasList || open) && (
         <div className="min-h-0 flex-1 overflow-y-auto px-2.5 pb-3">
           {changes.length === 0 ? (
-            planStale ? (
+            emptyScope ? (
+              /*
+               * ⚠️ 空范围必须自己说话：这时候"没有待推送"是**配置的结果**，
+               * 不是"已经推干净了"。混在一起说，用户会以为同步坏了。
+               */
+              <div
+                data-scope-empty
+                className="flex items-start gap-2 rounded-[7px] bg-warn-soft px-2 py-[6px] text-[12px] leading-snug text-warn"
+              >
+                <Alert size={13} strokeWidth={2} className="mt-[1px] shrink-0" />
+                <span>
+                  <span className="font-medium">推送范围是空的</span>，什么都推不上去。
+                  去「设置 → 推送」里加一条规则（比如 <span className="font-mono">thoughts/</span>）。
+                </span>
+              </div>
+            ) : planStale ? (
               <div className="flex items-center gap-2 rounded-[7px] bg-warn-soft px-2 py-[6px] text-[12px] text-warn">
                 <Alert size={13} strokeWidth={2} className="shrink-0" />
-                <span className="font-medium">本地改过了，同步时会先比对</span>
+                <span className="font-medium">本地改过了，推送时会先比对</span>
               </div>
             ) : (
               <div className="flex items-center gap-2 rounded-[7px] bg-ok-soft px-2 py-[6px] text-[12px] text-ok">
                 <Check size={13} strokeWidth={2} className="shrink-0" />
-                <span className="font-medium">本地和远端一致</span>
+                <span className="font-medium">范围里没有要推的</span>
               </div>
             )
           ) : (
@@ -164,7 +183,13 @@ export default function ChangeList() {
                     <button
                       key={`${c.kind}:${c.path}`}
                       data-change-row={c.path}
-                      onClick={() => setCurrent(c.path)}
+                      /*
+                       * 冲突行点开的是**选边面板**，不是这篇笔记本身：
+                       * 它的待办不是"去写它"，而是"决定用哪一侧"，
+                       * 打开编辑器只会让人看着一份不知道该信谁的内容发呆。
+                       */
+                      onClick={() => (c.kind === 'conflict' ? void openConflict(c.path) : setCurrent(c.path))}
+                      title={c.kind === 'conflict' ? '两边都改过 —— 点开选一边' : c.path}
                       className="flex w-full items-center gap-2 overflow-hidden rounded-[7px] px-1.5 py-[5px] text-left transition-colors hover:bg-surface-2"
                     >
                       <span
@@ -191,7 +216,7 @@ export default function ChangeList() {
                   title="程序文件的变更同样会同步，只是这里不显示"
                 >
                   <EyeOff size={12} className="shrink-0" />
-                  另有 {hidden} 项程序文件变更（照常同步）
+                  另有 {hidden} 项程序文件变更（照常推送）
                 </button>
               )}
             </>

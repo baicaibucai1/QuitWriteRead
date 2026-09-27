@@ -15,7 +15,7 @@ export default function DeleteBanner() {
   const busy = useStore((s) => s.busy);
   const pendingDeletes = useStore((s) => s.pendingDeletes);
   const cancelDeletes = useStore((s) => s.cancelDeletes);
-  const doSync = useStore((s) => s.doSync);
+  const doPush = useStore((s) => s.doPush);
 
   if (!pendingDeletes) return null;
 
@@ -38,7 +38,7 @@ export default function DeleteBanner() {
       </button>
       <button
         data-delete-ok
-        onClick={() => void doSync(true)}
+        onClick={() => void doPush(true)}
         disabled={busy !== null}
         className="shrink-0 rounded-[8px] bg-danger px-3 py-[4px] text-[12px] font-medium text-white shadow-xs transition-opacity hover:opacity-90 disabled:opacity-40 max-md:h-8 max-md:px-3"
       >

@@ -360,7 +360,12 @@ step('待同步：具体文件默认收着，点抬头才展开');
   // 一条差异都没有时，那两条提示是"现在要不要同步"的答案 —— 不能跟着收起
   await setChanges([]);
   await page.waitForTimeout(300);
-  ok('无差异时说"和远端一致"', ((await page.textContent('[data-changes]')) ?? '').includes('本地和远端一致'));
+  /*
+   * 文案 2026-09-27 改过：同步改成"推送"之后，空态该说的是**这个范围里没有要推的**，
+   * 而不是"本地和远端一致" —— 后者在"范围只圈了 thoughts/"时是撒谎
+   * （远端可能有一堆别的文件的更新，只是没进范围）。
+   */
+  ok('无差异时说"范围里没有要推的"', ((await page.textContent('[data-changes]')) ?? '').includes('范围里没有要推的'));
   ok('无差异时没有那个开关', (await page.locator('[data-changes-toggle]').count()) === 0);
   await setChanges([], true);
   await page.waitForTimeout(300);

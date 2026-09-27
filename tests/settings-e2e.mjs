@@ -88,16 +88,33 @@ step('入口在左下角（同步在 dock，挨着设置）');
   // dock 只管动手，状况并进了上面的「待同步」抬头 —— 一行装得下（两行那条试过，臃肿）
   const dockH = (await page.locator('[data-dock]').boundingBox()).height;
   ok('dock 只有一行', dockH <= 56, `高 ${dockH}px`);
+  /*
+   * 四颗：刷新 → 推送 → 拉取 → 设置。
+   * 「拉取」是 2026-09-27 加的第四颗 —— 推送改成可以定时自动，拉取则永远是人挑的，
+   * 两个方向并排摆着，谁挨着谁都能一眼看出是两件事。
+   */
   ok(
-    'dock 是三颗按钮（刷新差异 + 同步 + 设置）',
-    (await page.locator('[data-dock] button').count()) === 3,
+    'dock 是四颗按钮（刷新 + 推送 + 拉取 + 设置）',
+    (await page.locator('[data-dock] button').count()) === 4,
+    String(await page.locator('[data-dock] button').count()),
   );
-  ok('同步在 dock 里', (await page.locator('[data-dock] [data-sync]').count()) === 1);
+  ok('推送在 dock 里', (await page.locator('[data-dock] [data-sync]').count()) === 1);
+  ok('拉取也在 dock 里', (await page.locator('[data-dock] [data-pull]').count()) === 1);
   ok(
-    '顺序是 刷新 → 同步 → 设置（同步紧挨着设置）',
+    '顺序是 刷新 → 推送 → 拉取 → 设置（拉取紧挨着设置）',
     (await page.locator('[data-dock] button').evaluateAll((els) =>
-      els.map((e) => e.dataset.refresh !== undefined ? 'refresh' : e.dataset.sync !== undefined ? 'sync' : e.dataset.settings !== undefined ? 'settings' : '?'),
-    )).join('>') === 'refresh>sync>settings',
+      els.map((e) => e.dataset.refresh !== undefined ? 'refresh' : e.dataset.sync !== undefined ? 'push' : e.dataset.pull !== undefined ? 'pull' : e.dataset.settings !== undefined ? 'settings' : '?'),
+    )).join('>') === 'refresh>push>pull>settings',
+  );
+  // 四颗挤在 272px 里，文字最容易先被吃掉
+  ok(
+    '四颗的字都没被挤掉（不是「推…」）',
+    (await page.locator('[data-dock] button').evaluateAll((els) =>
+      els.map((e) => {
+        const s = e.querySelector('span');
+        return !!s && e.scrollWidth <= e.clientWidth + 1 && s.textContent.trim().length >= 2;
+      }),
+    )).every(Boolean),
   );
 
   const aside = await page.locator('[data-drawer]').boundingBox();

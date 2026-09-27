@@ -2,11 +2,14 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Change } from './decide';
 import type { FileMap, Snapshot } from './sync';
-import { planSync, syncOnce } from './sync';
+import { planSync, pushOnce, pullOnce, resolveConflict } from './sync';
+import type { ConflictSide } from './sync';
+import { DEFAULT_SCOPE, normalizeScope } from './scope';
+import type { PushScope } from './scope';
 import { dedupePath, importBase, noteBody, notePath } from './note';
 import { stripExt } from './mdimport';
 import type { ImportReport } from './mdimport';
-import { bytesToBase64, dataUrl } from './binary';
+import { bytesToBase64, dataUrl, isBinaryPath } from './binary';
 import type { GhConfig } from './gh';
 import {
   createFolder as makeFolder,
@@ -418,7 +421,40 @@ type State = {
    */
   moveEntry: (path: string, destDir: string) => EditResult;
   refreshPlan: () => Promise<void>;
-  doSync: (allowDelete?: boolean) => Promise<void>;
+  /** 推送：把**范围内**的本地改动推上去。`allowDelete` = 已确认过「就删这些」 */
+  doPush: (allowDelete?: boolean) => Promise<void>;
+  /** 拉取：把这几篇从远端拿回来。**人选的动作**，不是自动的 */
+  doPull: (paths: string[]) => Promise<void>;
+  /**
+   * 推送范围。**持久化** —— 它是"我这个库打算推什么"的长期决定，不该每次重配。
+   * 详见 lib/scope.ts 头上那段：范围外的文件同步层完全看不见，因此绝不会误删远端。
+   */
+  scope: PushScope;
+  setScope: (next: PushScope) => void;
+  /** 定时推送的开关与间隔（分钟）。只在应用开着时跑 */
+  autoPush: boolean;
+  autoPushMin: number;
+  setAutoPush: (on: boolean, min?: number) => void;
+  /**
+   * 远端**全部**文件的指纹（含范围外的）。「浏览远端、挑几篇拉」靠它 ——
+   * 不存下来的话，那个面板得自己再打一次远端，而它展示的还得跟清单里那份是同一份。
+   */
+  remoteFiles: Record<string, string>;
+  /** 远端浏览面板开不开。**不持久化** —— 每次进来被它糊住半屏是打扰 */
+  remotePane: boolean;
+  setRemotePane: (v: boolean) => void;
+  /**
+   * 正在选边的那篇（两边都改过的）。**不持久化**。
+   * 连同它一起存的是**云端那一版的正文** —— 差异要拿着两版才画得出来，
+   * 而远端内容不该常驻在内存里（改一次就过期了）。
+   */
+  conflictOf: string | null;
+  conflictRemote: string | null;
+  conflictBusy: boolean;
+  openConflict: (path: string) => Promise<void>;
+  closeConflict: () => void;
+  /** 选边：`local` 用本机 / `remote` 用云端 / `both` 两版都留 */
+  resolve: (path: string, side: ConflictSide) => Promise<void>;
   cancelDeletes: () => void;
   /**
    * 点 `[[笔记]]` 要去的那一篇。**没有就当场建一篇**（Obsidian 的规矩）：
@@ -507,6 +543,14 @@ export const useStore = create<State>()(
       focusTick: 0,
       pendingDeletes: null,
       planStale: false,
+      scope: DEFAULT_SCOPE,
+      autoPush: false,
+      autoPushMin: 30,
+      remoteFiles: {},
+      remotePane: false,
+      conflictOf: null,
+      conflictRemote: null,
+      conflictBusy: false,
       drawer: false,
       settings: false,
       settingsTab: 'general',
@@ -874,37 +918,39 @@ export const useStore = create<State>()(
         const { remote, files, snapshot } = get();
         set({ busy: 'plan', error: null });
         try {
-          const plan = await planSync(remote(), files, snapshot);
+          const plan = await planSync(remote(), files, snapshot, get().scope);
           if (seq !== opSeq) return;
-          set({ changes: plan.changes, busy: null, planStale: false });
+          set({ changes: plan.changes, remoteFiles: plan.remote, busy: null, planStale: false });
         } catch (e) {
           if (seq !== opSeq) return;
           set({ busy: null, error: (e as Error).message });
         }
       },
 
-      doSync: async (allowDelete = false) => {
-        // 同上：仓库还没读进来时的"同步"是**删远端**，不是同步
+      doPush: async (allowDelete = false) => {
+        // 同上：仓库还没读进来时的"推送"是**删远端**，不是推送
         if (!get().repoReady) {
-          set({ error: '仓库还没打开 —— 等它读完再同步' });
+          set({ error: '仓库还没打开 —— 等它读完再推送' });
           return;
         }
         const seq = ++opSeq;
-        const { remote, files, snapshot } = get();
+        const { remote, files, snapshot, scope } = get();
         set({ busy: 'sync', error: null, log: [], pendingDeletes: null });
         try {
-          const res = await syncOnce(remote(), files, snapshot, { allowDelete });
+          const res = await pushOnce(remote(), files, snapshot, scope, { allowDelete });
           if (seq !== opSeq) return;
           const blocked = new Set(res.pendingDeletes);
+          const conflicted = new Set(res.conflicts);
           set({
             files: res.files,
             snapshot: res.snapshot,
-            // 这轮已经拉完/推完的都消掉，只留等确认的删除 —— 否则顶栏会一边显示
-            // 「与远端一致」一边问你要不要删文件，自相矛盾
-            changes: blocked.size ? get().changes.filter((c) => blocked.has(c.path)) : [],
+            remoteFiles: res.remote,
+            // 这轮推完的就消掉，只留等确认的删除和待选边的冲突 ——
+            // 否则界面会一边显示「没有要推送的」一边问你要不要删文件，自相矛盾
+            changes: get().changes.filter((c) => blocked.has(c.path) || conflicted.has(c.path)),
             log: res.log,
             busy: null,
-            dirty: blocked.size > 0,
+            dirty: blocked.size > 0 || conflicted.size > 0,
             lastSyncAt: new Date().toLocaleTimeString('zh-CN'),
             pendingDeletes: blocked.size ? res.pendingDeletes : null,
             planStale: false,
@@ -916,6 +962,95 @@ export const useStore = create<State>()(
           set({ busy: null, error: (e as Error).message });
         }
       },
+
+      doPull: async (paths) => {
+        if (!get().repoReady) {
+          set({ error: '仓库还没打开 —— 等它读完再拉取' });
+          return;
+        }
+        if (paths.length === 0) return;
+        const seq = ++opSeq;
+        const { remote, files, snapshot, scope } = get();
+        set({ busy: 'sync', error: null, log: [] });
+        try {
+          const res = await pullOnce(remote(), files, snapshot, paths, scope);
+          if (seq !== opSeq) return;
+          const conflicted = new Set(res.conflicts);
+          set({
+            files: res.files,
+            snapshot: res.snapshot,
+            remoteFiles: res.remote,
+            changes: get().changes.filter((c) => conflicted.has(c.path)),
+            log: res.log,
+            busy: null,
+            dirty: conflicted.size > 0,
+            lastSyncAt: new Date().toLocaleTimeString('zh-CN'),
+            planStale: false,
+          });
+        } catch (e) {
+          if (seq !== opSeq) return;
+          set({ busy: null, error: (e as Error).message });
+        }
+      },
+
+      setScope: (next) => {
+        /*
+         * 改范围要**立刻重新比对**：清单里现在列着的可能是范围外的文件，
+         * 不刷新的话用户会以为"我改了范围，怎么那篇还在待推送里"。
+         * 落盘由 persist 负责（scope 在 partialize 里）。
+         */
+        set({ scope: normalizeScope(next), planStale: true });
+      },
+
+      setRemotePane: (v) => set({ remotePane: v }),
+
+      openConflict: async (path) => {
+        const { remote } = get();
+        set({ conflictOf: path, conflictRemote: null, conflictBusy: true, error: null });
+        try {
+          // 附件没有"逐行"这回事，取回来也只是为了能原样覆盖 —— 面板里会说明
+          const text = isBinaryPath(path)
+            ? bytesToBase64(await remote().readBytes(path))
+            : await remote().read(path);
+          set({ conflictRemote: text, conflictBusy: false });
+        } catch (e) {
+          set({ conflictBusy: false, error: (e as Error).message });
+        }
+      },
+
+      closeConflict: () => set({ conflictOf: null, conflictRemote: null, conflictBusy: false }),
+
+      resolve: async (path, side) => {
+        const seq = ++opSeq;
+        const { remote, files, scope } = get();
+        set({ conflictBusy: true, error: null, log: [] });
+        try {
+          const res = await resolveConflict(remote(), files, path, side, scope);
+          if (seq !== opSeq) return;
+          set({
+            files: res.files,
+            snapshot: res.snapshot,
+            remoteFiles: res.remote,
+            // 这篇已经处理完，从清单里摘掉
+            changes: get().changes.filter((c) => c.path !== path),
+            log: res.log,
+            conflictOf: null,
+            conflictRemote: null,
+            conflictBusy: false,
+            lastSyncAt: new Date().toLocaleTimeString('zh-CN'),
+            planStale: false,
+          });
+        } catch (e) {
+          if (seq !== opSeq) return;
+          set({ conflictBusy: false, error: (e as Error).message });
+        }
+      },
+
+      setAutoPush: (on, min) =>
+        set((s) => ({
+          autoPush: on,
+          autoPushMin: min ? Math.min(240, Math.max(5, Math.round(min))) : s.autoPushMin,
+        })),
 
       cancelDeletes: () => set({ pendingDeletes: null }),
 
@@ -1097,6 +1232,9 @@ export const useStore = create<State>()(
         current: s.current,
         lastSyncAt: s.lastSyncAt,
         showAll: s.showAll,
+        scope: s.scope,
+        autoPush: s.autoPush,
+        autoPushMin: s.autoPushMin,
         provider: s.provider,
         dav: s.dav,
         od: s.od,

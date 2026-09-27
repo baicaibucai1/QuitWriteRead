@@ -129,6 +129,73 @@ try {
   await page.waitForTimeout(300);
   ok('面板收了', (await page.locator('[data-agent-pane]').count()) === 0);
 
+  /*
+   * ══ 写 ══
+   *
+   * 这是本轮要证明的头一条：**演示写的第一步一定会先问人**。
+   * 内核里 `append_note` 没标 readOnly，PermissionEngine 走到最后一句
+   * "No rule allows …"，于是必定弹 card —— 这条不靠提示词，是代码担保的。
+   */
+  step('演示「写」：先问人，点了允许才真的写');
+  await page.evaluate(() => window.__suisui.getState().setAgent({ demo: 'write' }));
+  await page.click('[data-agent-toggle]');
+  await page.waitForSelector('[data-agent-pane]', { timeout: 10000 });
+  await page.waitForFunction(() => !document.querySelector('[data-agent-input]')?.disabled, { timeout: 20000 });
+
+  const target = await page.evaluate(
+    () => `agent/演示-${new Date().toISOString().slice(0, 10)}.md`,
+  );
+  const before = await page.evaluate((p) => window.__suisui.getState().files[p] ?? null, target);
+
+  await page.fill('[data-agent-input]', '随便写一句什么到笔记里');
+  await page.click('[data-agent-send]');
+  // 写工具不带 readOnly → 内核停下来问人
+  await page.waitForSelector('[data-agent-perm]', { timeout: 20000 });
+  ok('写之前弹了卡', await page.isVisible('[data-agent-perm]'));
+  ok(
+    '卡上点名的是 append_note',
+    (await page.getAttribute('[data-agent-perm]', 'data-agent-perm-tool')) === 'append_note',
+  );
+  const permText = await page.textContent('[data-agent-perm]');
+  ok('卡上写清了要往哪一篇写', (permText ?? '').includes(target), (permText ?? '').slice(0, 80));
+  ok('四个选项都在', (await page.locator('[data-agent-perm-opt]').count()) === 4);
+  await page.screenshot({ path: `${OUT}/21-agent-perm.png` });
+
+  // —— 先拒绝：被拒之后一篇都不该动
+  await page.click('[data-agent-perm-opt="reject_once"]');
+  await page.waitForSelector('[data-agent-send]', { timeout: 30000 });
+  await page.waitForTimeout(400);
+  const afterReject = await page.evaluate((p) => window.__suisui.getState().files[p] ?? null, target);
+  ok('点了拒绝：那一篇还是没有', afterReject === before, String(afterReject).slice(0, 40));
+  const saidAfterReject = await page.textContent('[data-agent-text]');
+  ok('被拒了它也没说"写好了"', !(saidAfterReject ?? '').includes('追加好了'), (saidAfterReject ?? '').slice(0, 60));
+
+  // —— 再允许：这次要真的落进去
+  await page.fill('[data-agent-input]', '再来一次，这次允许');
+  await page.click('[data-agent-send]');
+  await page.waitForSelector('[data-agent-perm]', { timeout: 20000 });
+  await page.click('[data-agent-perm-opt="allow_once"]');
+  await page.waitForSelector('[data-agent-send]', { timeout: 30000 });
+  await page.waitForTimeout(500);
+  const afterAllow = await page.evaluate((p) => window.__suisui.getState().files[p] ?? null, target);
+  ok('点了允许：那一篇真的出来了', typeof afterAllow === 'string', String(afterAllow).slice(0, 40));
+  ok(
+    '而且是有内容的一段（不是空壳）',
+    typeof afterAllow === 'string' && afterAllow.includes('演示里追加'),
+    String(afterAllow).slice(0, 60),
+  );
+  // 写走的是 store 那份 —— 所以左栏文件树立刻就得有它，不用刷新
+  ok(
+    '左栏文件树里立刻看得到（写的是界面上那一份）',
+    (await page.locator(`[data-file="${target}"]`).count()) === 1,
+    target,
+  );
+  await page.screenshot({ path: `${OUT}/22-agent-wrote.png` });
+
+  // 收尾：这篇是演示写出来的，删掉，别留在仓库里
+  await page.evaluate((p) => window.__suisui.getState().removeFile(p), target);
+  await page.waitForTimeout(400);
+
   step('零报错');
   ok('没有页面错误', errors.length === 0, errors.slice(0, 4).join(' | '));
   if (noise.length) console.log(`  · 远端网络噪声 ${noise.length} 条（不算失败）`);

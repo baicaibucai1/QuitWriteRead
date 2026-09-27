@@ -19,9 +19,15 @@ import type { PermissionResponse } from './core/types/permission';
 import type { PermissionRequest } from './core/types/events';
 import type { OpenAICompatibleOptions, Provider } from './core/types/provider';
 import { createNoteTools } from './note-tools';
+import { createBookTools } from './book-tools';
 
 export type { Agent };
 export type { PermissionRequest, PermissionResponse };
+/*
+ * 工具名单独放在 `tool-list.ts`（零依赖）—— 设置页要列这张表，
+ * 不该为此把整个内核拉进设置那个 chunk。
+ */
+export { AGENT_TOOLS, canWriteFiles, countUsableTools, type AgentToolRow } from './tool-list';
 
 export type NoteAgentOptions = {
   baseURL: string;
@@ -39,6 +45,11 @@ export type NoteAgentOptions = {
   fetch?: typeof fetch;
   /** 写操作来问宿主。不传 = 内核按"默认拒绝"处理（写工具一律拦下） */
   onPermission?: (req: PermissionRequest, signal: AbortSignal) => Promise<PermissionResponse> | PermissionResponse;
+  /**
+   * 准不准它写笔记。关掉时**写工具一个都不注册** ——
+   * 模型连"有个 write_note"都不知道，也就不会浪费一轮去调它。
+   */
+  allowWrite?: boolean;
   maxSteps?: number;
 };
 
@@ -59,7 +70,15 @@ const HOUSE_RULES = [
   },
   {
     id: 'cite',
-    text: 'When you mention a note, name its path so the reader can open it.',
+    text: 'When you mention a note, name its path so the reader can open it. When you quote a book, name the book and the chapter.',
+  },
+  {
+    id: 'books',
+    text: 'Books live on a separate shelf from notes: list_books first, then read_book by chapter number (1-based) or search_book. They are read-only — there is no tool to change them.',
+  },
+  {
+    id: 'writing',
+    text: 'Write only through write_note / append_note. They ask the reader first: if the call comes back rejected, say it was not written and never claim otherwise. Use append_note unless replacing the whole note is really what was asked.',
   },
 ];
 
@@ -87,7 +106,13 @@ export async function createNoteAgent(opts: NoteAgentOptions): Promise<Agent> {
     skills: { enabled: false },
     // 会话默认只放内存；要跨刷新留住，宿主换一个 store 进来（IndexedDB）
     session: { store: new InMemorySessionStore() },
-    tools: createNoteTools(),
+    /*
+     * 工具集 = 笔记（读的三个 + 写的两个）+ 书籍（只读的四个）。
+     *
+     * ⚠️ 写的两个只在 `allowWrite` 为真时才注册。不是"注册了再拦"，
+     *    是从模型眼前就不存在 —— 它不会白白花一轮去调一个必定被拒的东西。
+     */
+    tools: [...createNoteTools({ allowWrite: opts.allowWrite !== false }), ...createBookTools()],
     permission: {
       mode: 'default',
       ...(opts.onPermission ? { onRequest: opts.onPermission } : {}),

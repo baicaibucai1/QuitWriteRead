@@ -9,13 +9,13 @@
  * 内核自带 `MockProvider`：回合可以写死，**第几步调哪个工具是确定的**，
  * 于是"工具真的被调了、结果真的回到模型眼前"这两件事第一次就能看见。
  *
- * ## 它演的是哪几步
+ * ## 两档脚本
  *
- *   ① 先 `list_notes` —— 逼它去看真实仓库里到底有哪些笔记（不许瞎编路径）；
- *   ② 拿回清单后 `read_note` 读第一篇 —— 证明工具结果真的回到了下一轮请求里；
- *   ③ 最后开口 —— 而且**只能照着工具回的东西说**。
- *
- * ⛔ 它不代替真模型：写死的两步只是为了验链路，不是"助手的思考"。
+ *   · `read`  —— 列出笔记 → 读第一篇 → 开口。**不碰你的东西**。
+ *   · `write` —— 追加一篇 → 开口。**会真的写一篇**（`agent/演示-<日期>.md`），
+ *                而且中途**必然弹一次权限卡** —— 这一档存在的全部理由就是让人
+ *                亲眼确认「问一句 → 点了允许 → 文件真的变了」这条链路走得通。
+ *                ⚠️ 所以它不是摆设：点它之前就知道它会落一篇。
  */
 import { MockProvider } from './core/provider/mock';
 import type { MockTurn } from './core/provider/mock';
@@ -29,8 +29,15 @@ function lastToolText(messages: { role: string; content?: unknown }[]): string {
   return '';
 }
 
-export function createDemoProvider(): MockProvider {
-  const turns: MockTurn[] = [
+/** 演示写要落的那篇。日期进了文件名，一天点几次也不会互相盖掉 */
+export function demoNotePath(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `agent/演示-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}.md`;
+}
+
+function readTurns(): MockTurn[] {
+  return [
     // ① 先列一遍 —— 工具名和参数都是真的，跑的是真 Repo
     { toolCalls: [{ name: 'list_notes', args: {} }] },
     // ② 读清单里的第一篇（清单是**上一步真跑出来的**，不是写死的）
@@ -59,12 +66,69 @@ export function createDemoProvider(): MockProvider {
       };
     },
   ];
-  return new MockProvider(turns);
 }
 
-/** 演示模式在设置页里要跟人说清的三行 */
-export const DEMO_NOTES = [
-  '不连网络、不用 Key。',
-  '工具是真的：走的还是你仓库里那堆 md。',
-  '最后那句话是写死的 —— 它证明的是链路通，不是模型聪明。',
-];
+function writeTurns(): MockTurn[] {
+  return [
+    /*
+     * 直接调 `append_note` —— 它没标 readOnly，内核在 default 模式下走到最后一句
+     * "No rule allows …"，于是**必定**弹卡。这一档演示的就是那张卡。
+     */
+    (req) => {
+      const round = req.messages.filter((m) => m.role === 'user').length;
+      return {
+        toolCalls: [
+          {
+            name: 'append_note',
+            args: {
+              /*
+               * 路径固定成 `agent/演示-<日期>.md`，**不从用户那句话里抠**。
+               * 抠出来的东西有可能是任何地方 —— 演示不该有把用户的某篇真笔记
+               * 改掉的机会，哪怕概率很小。它要写在哪儿必须是可预见的。
+               */
+              path: demoNotePath(),
+              content: `这是助手在演示里追加的第 ${round} 段 —— 时间是 ${new Date().toLocaleTimeString('zh-CN')}。`,
+            },
+          },
+        ],
+      };
+    },
+    // 收尾：把工具回的那句话原样说出来（被拒时会不一样 —— 这就对了）
+    (req) => {
+      const res = lastToolText(req.messages).trim();
+      return {
+        text:
+          `（演示：写）\n\n${res}\n\n` +
+          `上面这一步是 append_note —— 它不是只读工具，所以内核先问了你要不要。\n` +
+          `点了「就这一次」它才真的写；点那几个拒绝的，它就没动 —— 那种时候它不该说"写好了"。`,
+      };
+    },
+  ];
+}
+
+/**
+ * 演示用的 provider。
+ *
+ * 基类 `MockProvider` 的回合游标是**实例级**的（`turn++` 不随 run 回到 0），
+ * 于是脚本只有三步时，问第二句就开始答"没有编排了" —— 表现为第一次能调工具、
+ * 第二次直接开口，看着像随机失灵。
+ * 演示要的恰恰相反：**每一句提问都把这套脚本重走一遍**，所以这里认「新一轮」，
+ * 从头再演。判据是这一帧请求的最后一条是不是刚发出来的 user 消息 ——
+ * 一个 run 内部还会来好几帧（工具结果回灌），那些不能算新一轮。
+ */
+class DemoProvider extends MockProvider {
+  constructor(script: () => MockTurn[]) {
+    super(script());
+  }
+
+  stream(req: Parameters<MockProvider['stream']>[0], opts: Parameters<MockProvider['stream']>[1]) {
+    const last = req.messages[req.messages.length - 1];
+    // ⛔ 别去碰基类的 turns 数组（它是 private，而且本来也没被消耗 —— 游标归零就够了）
+    if (last?.role === 'user') this.reset();
+    return super.stream(req, opts);
+  }
+}
+
+export function createDemoProvider(kind: 'read' | 'write' = 'read'): MockProvider {
+  return new DemoProvider(kind === 'write' ? writeTurns : readTurns);
+}

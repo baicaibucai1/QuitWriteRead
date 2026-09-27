@@ -90,22 +90,30 @@ export const SIDEBAR_DEFAULT = { L: 272, R: 250 } as const;
 export type SettingsTab = 'general' | 'sync' | 'agent' | 'reading' | 'about';
 
 /**
- * AI 助手那一节的三个字段 + 一个演示开关。
+ * 演示模式的三档。
  *
- * ⚠️ `demo` 默认**开着**：没有 Key 的人打开助手，看到的应该是"跑得起来"，
- * 而不是"请先配置"（那等于把人挡在门外，还看不出这东西到底能干什么）。
- * 真要连模型，把开关关掉、填上三个字段 —— 那时候演示那套脚本就不参与了。
+ * `demo` 与 `allowWrite` 是**两件事**：前者是"不连模型时用哪套脚本"，
+ * 后者是"接上真模型之后，还准不准它动你的笔记"。
+ *
+ * ⚠️ `demo: 'write'` **会真的写一篇笔记到仓库里**（`agent/演示-<日期>.md`）——
+ *      它是用来亲眼确认"审批卡 → 真的落盘"这条链路的，不是个摆设。
+ * ⚠️ `demo` 不是 `allowWrite` 的快关：演示写的时候写工具照注册，
+ *      否则演示的点（看那张卡）就落空了。
  */
+export type DemoMode = 'off' | 'read' | 'write';
+
 export type AgentSettings = {
-  /** 演示模式：不连模型，走 `lib/agent/demo.ts` 那套写死的回合 */
-  demo: boolean;
+  demo: DemoMode;
+  /** 接上真模型后，还准它写笔记吗。**默认开** —— 每次写都会弹卡，卡就是那道闸 */
+  allowWrite: boolean;
   baseURL: string;
   apiKey: string;
   model: string;
 };
 
 export const DEFAULT_AGENT: AgentSettings = {
-  demo: true,
+  demo: 'read',
+  allowWrite: true,
   baseURL: 'https://api.openai.com/v1',
   apiKey: '',
   model: 'gpt-4o-mini',

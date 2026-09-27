@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { BRANCH, OWNER, REPO, useStore } from '../lib/store';
+import { BRANCH, OWNER, REPO, useStore, type DemoMode } from '../lib/store';
 import type { SettingsTab } from '../lib/store';
+// ⚠️ 从 tool-list 这一层 import，别从 `lib/agent` —— 后者会把整个内核拖进设置这块
+import { AGENT_TOOLS, canWriteFiles, countUsableTools } from '../lib/agent/tool-list';
 import { PROVIDERS } from '../lib/providers';
 import type { ProviderId } from '../lib/providers';
 import { hasDavTransport } from '../lib/providers';
@@ -30,10 +32,28 @@ import { Alert, BookOpen, Close, Cloud, FileText, FolderPlus, Info, Refresh, Spa
 const TABS: { id: SettingsTab; label: string; hint: string }[] = [
   { id: 'general', label: '常规', hint: '仓库在哪、文件列表怎么列' },
   { id: 'sync', label: '推送', hint: '东西存在哪、推哪些、多久推一次' },
-  { id: 'agent', label: 'AI 助手', hint: '接哪家模型、要不要先演示' },
+  { id: 'agent', label: 'AI 助手', hint: '接哪家模型、准不准它动笔记' },
   { id: 'reading', label: '阅读', hint: '书的字体、字号、纸色' },
   { id: 'about', label: '关于', hint: '这个软件是什么' },
 ];
+
+/*
+ * 演示三档。**互斥** —— 做成 pill 而不是三个开关，因为一次只能走一条路。
+ * 每档要配一句人话说明它到底演什么，尤其是"写"那一档：
+ * 它会真的落一篇到 `agent/演示-<日期>.md`，点之前就该知道。
+ */
+const DEMO_MODES: { id: DemoMode; label: string; hint: string }[] = [
+  { id: 'read', label: '演示：读', hint: '不连模型，但真的去读你的笔记' },
+  { id: 'write', label: '演示：写', hint: '会真的写一篇，中途弹一次审批卡' },
+  { id: 'off', label: '不演示', hint: '接真模型 —— 下面填地址和 Key' },
+];
+
+const DEMO_HINT: Record<DemoMode, string> = {
+  read: '演示「读」：不连网络、不用 Key。工具是真的 —— 走的还是你仓库里那堆 md。最后那句话是写死的，它证明的是链路通，不是模型聪明。',
+  write:
+    '演示「写」：会往 agent/演示-<今天>.md 追加一段，而且中途**一定先问你一句** —— 这一档存在的理由就是让你亲眼确认「点了允许 → 文件真的变了」。点了拒绝它就没动，那种时候它也不会说"写好了"。',
+  off: '演示关了：下面三个字段填完才算接上了模型。',
+};
 
 function IconOf({ id }: { id: SettingsTab }) {
   if (id === 'general') return <FileText size={13} />;
@@ -717,33 +737,45 @@ function Sync() {
   );
 }
 
-/* ── AI 助手：接哪家模型 ── */
+/* ── AI 助手：接哪家模型、准不准它动笔记 ── */
 function Agent() {
   const agent = useStore((s) => s.agent);
   const setAgent = useStore((s) => s.setAgent);
 
+  // ⚠️ 跟 ChatPane 装配时用同一个函数 —— 见 tool-list.ts 里那条注释
+  const writing = canWriteFiles(agent);
+
   return (
     <Section
       title="AI 助手"
-      intro="顶栏那颗星打开它。它能读你的笔记，但改不动 —— 内核那边只给了它三个只读工具（列出 / 读一篇 / 搜一段），写工具一个都没注册。"
+      intro="顶栏那颗星打开它。笔记能读能写，书架上的书能读 —— 一共九个工具，下面列全了。"
     >
-      <Toggle
-        id="agent-demo"
-        label="演示模式"
-        hint="不连模型、不用 Key，走一套写死的回合 —— 用来看链路通不通，不是看它聪不聪明"
-        on={agent.demo}
-        onChange={(v) => setAgent({ demo: v })}
-      />
+      {/*
+        演示三档。**互斥的一组**，做成 pill 而不是三个开关 ——
+        一次只能走一条路，开关会让人以为能同时演示读又演示写。
+      */}
+      <div className="mb-1 mt-0.5 text-[11.5px] text-ink-3">不连模型时走哪套脚本</div>
+      <div data-demo-list className="flex flex-wrap gap-1.5">
+        {DEMO_MODES.map((d) => (
+          <button
+            key={d.id}
+            type="button"
+            data-demo={d.id}
+            onClick={() => setAgent({ demo: d.id })}
+            title={d.hint}
+            className={`rounded-full border px-2.5 py-[4px] text-[12px] transition-colors ${
+              agent.demo === d.id
+                ? 'border-accent-line bg-accent-soft font-medium text-accent'
+                : 'border-line bg-surface-2 text-ink-2 hover:text-ink'
+            }`}
+          >
+            {d.label}
+          </button>
+        ))}
+      </div>
+      <Hint>{DEMO_HINT[agent.demo]}</Hint>
 
-      {agent.demo ? (
-        <div data-agent-demo-notes className="mt-3 space-y-1 rounded-[10px] border border-line bg-surface-2 px-3 py-2.5 text-[11.5px] leading-relaxed text-ink-3">
-          <p>
-            演示模式会<b className="font-medium text-ink-2">真的去读你的仓库</b>：先列一遍笔记，
-            再读第一篇，最后那句话是写死的。
-          </p>
-          <p>它证明的是「工具真的被调用了、结果真的回到了模型眼前」，不是模型会说话。</p>
-        </div>
-      ) : (
+      {agent.demo === 'off' && (
         <div className="mt-3 space-y-1.5">
           <label className="block">
             <span className="mb-[3px] block text-[11px] text-ink-3">接口地址</span>
@@ -783,14 +815,56 @@ function Agent() {
             换国内几家改地址就行。⚠️ 浏览器直连要端点放行 CORS ——
             不放行的会连不上，那种情况得用桌面端（那边的请求可以走本地代理）。
           </Hint>
+
+          {/*
+            写权限。**只在接真模型时出现** —— 演示那两档有自己的脚本，
+            在这儿给一个开关，改了也不影响演示，就是个按了没反应的东西。
+          */}
+          <div className="mt-3 border-t border-line pt-3">
+            <Toggle
+              id="agent-write"
+              label="让它写笔记"
+              hint="write_note / append_note 两个工具。不是注册了再拦 —— 关掉时模型根本看不见它们"
+              on={agent.allowWrite}
+              onChange={(v) => setAgent({ allowWrite: v })}
+            />
+          </div>
         </div>
       )}
 
+      {/* 工具清单：**界面上说它能干什么，就得真是那些** —— 两边是从同一份名字表来的 */}
+      <div className="mt-4 border-t border-line pt-3">
+        <div className="mb-1.5 flex items-baseline gap-2">
+          <span className="text-[11.5px] text-ink-3">它现在能用</span>
+          <span data-agent-tool-count className="text-[11px] text-ink-3">
+            {countUsableTools(agent)} / {AGENT_TOOLS.length} 个工具
+          </span>
+        </div>
+        <ul data-agent-tool-list className="space-y-[3px]">
+          {AGENT_TOOLS.map((t) => {
+            const on = !t.write || writing;
+            return (
+              <li key={t.name} data-agent-tool-row={t.name} data-on={on ? '1' : '0'} className="flex items-baseline gap-2">
+                <code className={`shrink-0 font-mono text-[11px] ${on ? 'text-ink-2' : 'text-ink-3 line-through'}`}>
+                  {t.name}
+                </code>
+                <span className={`min-w-0 flex-1 text-[11px] ${on ? 'text-ink-3' : 'text-ink-3/60'}`}>
+                  {t.what}
+                  {!on && '（已关）'}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+
       <div className="mt-4 border-t border-line pt-3">
         <Hint>
-          Key 现在跟同步的 token 一个待遇：存在本机 localStorage（demo 阶段），
-          正式版要进系统凭据库。改完这几项<b className="font-medium text-ink-2">下次打开助手才生效</b>
-          —— 模型是建实例那会儿就定死的，改了不重建等于没改。
+          写都是<b className="font-medium text-ink-2">改界面上那一份</b>（不是另写到磁盘），
+          所以写完文件树和编辑器立刻跟着变，不用你去刷新。
+          Key 跟同步的 token 一个待遇：现在在本机 localStorage，正式版要进系统凭据库。
+          改完这几项<b className="font-medium text-ink-2">下次打开助手才生效</b>
+          —— 工具是建实例那会儿装好的，中途换不掉。
         </Hint>
       </div>
     </Section>

@@ -330,8 +330,18 @@ OneDrive 给 quickXorHash，算法跟本地不同 —— 直接拿来当基线�
 
 ## AI 助手
 
-顶栏那颗星打开它。它能**读**你的笔记，**改不动** —— 这不是"先不给写权限"，是内核那边
-只注册了三个只读工具（`list_notes` / `read_note` / `search_notes`），写工具一个都没装。
+顶栏那颗星打开它。**笔记能读能写，书架上的书能读** —— 一共九个工具，设置里那一张清单
+就是从代码里那份名字表来的，界面上说它能干什么，它就是真能干那些。
+
+| | 工具 | 干什么 |
+| --- | --- | --- |
+| 笔记 | `list_notes` / `read_note` / `search_notes` | 列出、读一篇、全文搜一段 |
+| 笔记 | `write_note` / `append_note` | **写**：整篇改写 / 末尾追加（**都要先问一句**） |
+| 书 | `list_books` / `read_book` / `search_book` / `list_book_notes` | 列书架、读某一章、书内搜、读你的批注 |
+
+**书的那一半是另一处数据源**：笔记是磁盘上真的一堆 `.md`（走 `Repo`），书是 IndexedDB 里的
+zip 字节（走 `bookdb`）—— 当初就是刻意分开的，一本书 2~20MB 进笔记那条链路只会把每次同步拖死。
+所以读一本书要**解压一遍**（`readEpub` → `chapterText`），结果按"最近用"缓存三本。
 
 ### 为什么要 vendored 一个内核，而不是自己写个循环
 
@@ -353,15 +363,30 @@ OneDrive 给 quickXorHash，算法跟本地不同 —— 直接拿来当基线�
 3. **规则走 `injectedPrompts` 而不是 system prompt**：这条通道**不进 transcript**，
    压缩 / 裁剪 / 模型跑偏都动不了它 —— 是内核里唯一能保证"每一步都看见"的路子。
 
+### 写这件事：三条规矩
+
+1. **写走的是界面上那一份**，不是另开一条写盘的路。工具调的是 `store.setContent`，
+   所以写完文件树和编辑器**立刻**跟着变。绕过它直接写磁盘 = 两条写路径，
+   下一次 flush 按内存那份为准，助手写的东西会被悄悄盖回去。
+2. **写之前必然弹卡**，而且卡上写清「要把 1200 字换成 900 字」—— 只报个文件名等于让人盲签。
+   这不是提示词里的恳求：`write_note` / `append_note` 没标 `readOnly`，内核在 default 模式下
+   走到 `PermissionEngine` 最后一句 "No rule allows …"，所以**必定**来问。
+3. **关掉写权限时，写工具根本不注册** —— 不是注册了再拦。模型连"有个 `write_note`"都不知道，
+   不会白花一轮去调一个必定被拒的东西。设置里那句「7 / 9 个工具」就是这么算出来的。
+
+被拒的时候它也不许撒谎：`injectedPrompts` 里钉了一条「调用被拒就说没写成」。
+
 ### 演示模式
 
-不连模型、不用 Key，走 `MockProvider` 的两步脚本：先 `list_notes` 列出仓库，
-再 `read_note` 读第一篇，最后一句是写死的。**工具是真的、读的是你那堆 md**，
-假的只有"最后那句话是谁说的"。它的用处是：没有 Key 也能一眼看出链路通不通。
+不连模型、不用 Key，走 `MockProvider` 的脚本 —— **三个档位，设置里选**：
 
-想接真模型就把演示关掉，填接口地址 / Key / 模型（OpenAI 兼容那套 `/chat/completions`，
-换国内几家改地址就行）。⚠️ 浏览器直连要端点放行 CORS；不放行的得用桌面端
-（那边的请求可以走本地代理 —— 内核留了 `fetch` 注入口，就是为这个）。
+- **演示：读** —— 真的去读你的仓库（列出 → 读第一篇），最后一句是写死的。工具是真的，假的只有"那句话是谁说的"。
+- **演示：写** —— 往 `agent/演示-<今天>.md` 追加一段，**中途一定先问你一句**。
+  这一档存在的全部理由就是让你亲眼确认「点了允许 → 文件真的变了」；点拒绝它就没动，也不许说"写好了"。
+- **不演示** —— 填接口地址 / Key / 模型接真模型（OpenAI 兼容那套 `/chat/completions`，换国内几家改地址就行）。
+
+⚠️ 浏览器直连要端点放行 CORS；不放行的得用桌面端（那边的请求可以走本地代理 —— 内核留了
+`fetch` 注入口，就是为这个）。
 
 ## 还没做
 
@@ -424,7 +449,8 @@ node tests/rename-e2e.mjs         # 浏览器：右键菜单 → 就地改名（
 node tests/layout-e2e.mjs         # 浏览器：右栏常驻 → 大纲 → 关系面板 → 左栏搜索 → 待同步清单收起 / 展开 → 右栏收起 / 展开走**顶栏**那颗（收起 = 整列消失）→ 左栏同理 → 同步在状态栏 + A± 调编辑器字号 → **两侧边栏拖宽度（含上限 / 双击复位 / 刷新记住 / 手机上没有）** → 手机视口 64 例
 node tests/smoke.mjs              # 浏览器：拉取 → 打开文章 → 创建笔记 → md 工具栏 → 截图
 node tests/settings-e2e.mjs       # 设置对话框 60 例（入口在左下角 / 居中大卡 + 左列分节 / 凭据跟着后端走 / 后端不放假按钮 / **AI 助手节默认演示、不放假输入框** / 阅读节改一处读处跟着变 / Esc 与点遮罩 / 手机铺满 / 壁纸已移除）
-node tests/agent-e2e.mjs          # 浏览器：**AI 助手真跑一遍内核** 21 例（入口唯一 / 事件流 / `list_notes`→`read_note` 读的是仓库里那一篇的正文 / 没有工具要审批 / Esc / 零报错）
+node tests/agent-e2e.mjs          # 浏览器：**AI 助手真跑一遍内核** 29 例（入口唯一 / 事件流 / `list_notes`→`read_note` 读的是仓库里那一篇的正文 / **写之前必弹卡 → 拒绝就没写 → 允许才真落盘且左栏立刻看得到** / Esc / 零报错）
+node tests/agent-books-e2e.mjs    # 浏览器：**书籍工具** 21 例（造一本真 epub 导入 → 四个工具都是只读 / 读的是第一章真的字 / `<script>` 没混进正文 / 章节超范围与书名对不上都说得明明白白 / 找不到就直说）
 node tests/mobile-e2e.mjs         # 手机视口 58 例（抽屉 / 工具栏横滚 / 触摸尺寸 / 顶栏精简 / 同步钮在状态栏 / 手机壳页 / 桌面不回归）
 node tests/pwa-e2e.mjs            # 产物上的 PWA 15 例（SW 注册 → 断开网络仍能打开）
 node tests/lazy-e2e.mjs           # 编辑器按需加载 21 例（入口包里没有编辑器 / 首屏不拉 / 加载中给骨架）
@@ -668,9 +694,11 @@ SW 和 HTTP 缓存的隔离边界都是 origin，换端口就等于换了一整�
 | `src-tauri/` | 桌面端骨架。目前只提供 `dav_request`：让坚果云绕开 CORS |
 | `src/lib/agent/core/` | **vendored 的 agent 内核**（`nosie-agent-core`，MIT，v0.2.0）。原样搬进来后再做浏览器化：删掉 cli / sidecar / MCP / 文件记忆 / JSONL 会话 / fs+shell 工具，剩下循环、权限、压缩、预算那半（纯逻辑）。⚠️ 它是**第三方代码**，改之前先看 `src/lib/agent/index.ts` 文件头那三条装配原则 |
 | `src/lib/agent/shims/` | 内核要的 Node 内置在浏览器里的替身。`path` / `os` / `crypto` / `url` 是**真实现**；`fs` / `child_process` / `readline` / `stream` **调到就抛**（静默返回空数据会让"内核以为自己写了文件"这种事故查不出来） |
-| `src/lib/agent/note-tools.ts` | 助手能用的工具：**三个只读**（列出 / 读一篇 / 搜一段），底下是 `Repo` —— 仓库内相对路径，出不去。所以"沙箱"在这儿是天然的，不需要再兜一层路径检查 |
+| `src/lib/agent/note-tools.ts` | 笔记工具：读的三个 + **写的两个**（`write_note` / `append_note`，都走 `store.setContent`，不另开写盘的路）。底下是 `Repo` —— 仓库内相对路径，出不去，所以"沙箱"在这儿是天然的 |
+| `src/lib/agent/book-tools.ts` | 书籍工具：四个，**全只读**。数据源是 `bookdb`（IndexedDB）而不是 `Repo`；模型只知道书名不知道 uuid，所以按标题匹配，对不上就把候选列出来。解压结果缓存三本 |
+| `src/lib/agent/tool-list.ts` | **零依赖**的工具名表 + `canWriteFiles()`。设置页列它，装配处也用它 —— 两边同一个来源，界面上那句"N 个工具"才不会是谎话。⚠️ 别从 `lib/agent` 引它（会把内核拖进设置那个 chunk） |
 | `src/lib/agent/index.ts` | 装配处：polyfill 必须最前、不给文件系统、模型请求走可注入的 `fetch`（桌面端可换 Rust 代理绕 CORS + 护 Key） |
-| `src/lib/agent/demo.ts` | 演示模式的 `MockProvider`：两步真工具 + 一句写死的话。**验的是链路通不通，不是模型聪不聪明** |
+| `src/lib/agent/demo.ts` | 演示模式的 `MockProvider`：读 / 写两套脚本。**验的是链路通不通，不是模型聪不聪明**。`DemoProvider` 覆写了 `stream` —— 基类的回合游标不随 run 归零，不认「新一轮」的话问第二句就演完了 |
 | `src/components/ChatPane.tsx` | 助手面板（懒加载，内核那 104 kB 不进首屏）。把事件流画出来：`text_reset` 是**清空**不是出错；工具卡按 `toolCallId` 记 |
 | `src/lib/sync.ts` | 对外动作的编排：**只推**（`pushOnce`）/ **只拉指定的几篇**（`pullOnce`）/ **选边**（`resolveConflict`）；比对先按推送范围收窄，删远端一律要人点头 |
 | `src/lib/store.ts` | Zustand 状态（本地工作副本 + 快照）。**异步操作带序号，防止旧操作覆盖新状态**；`side`（书写 / 阅读在哪边）与 `lastBookId`（上次读的那本）持久化，`currentBook` 不持久化 —— 重开先回书架 |

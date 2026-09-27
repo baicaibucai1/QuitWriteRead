@@ -3,6 +3,7 @@ import { useStore } from '../lib/store';
 import { createNoteAgent } from '../lib/agent';
 import type { Agent, PermissionRequest, PermissionResponse } from '../lib/agent';
 import { createDemoProvider } from '../lib/agent/demo';
+import { canWriteFiles } from '../lib/agent/tool-list';
 import type { AgentEvent } from '../lib/agent/core/types/events';
 import type { ToolCallStatus } from '../lib/agent/core/types/messages';
 import { textOf } from '../lib/agent/core/types/messages';
@@ -32,7 +33,24 @@ import { Close, Sparkle } from './icons';
 type Item =
   | { id: string; kind: 'user'; text: string }
   | { id: string; kind: 'text'; text: string }
-  | { id: string; kind: 'tool'; name: string; title: string; status: ToolCallStatus; args: string; result?: string; error?: boolean; ms?: number }
+  /*
+   * ⚠️ `id` 是**界面自己的**序列，不能拿 `toolCallId` 当 React key：
+   * 演示脚本第二轮会把同一个 toolCallId 再发一次（TurnCounter 归零），
+   * 而 items 是累积的 → 两个 key 撞上。映射按 `callId`（toolCallId）查，
+   * key 用 `id` —— 两件事分开，这是 events.md 里"按 toolCallId 追踪"的正解。
+   */
+  | {
+      id: string;
+      kind: 'tool';
+      callId: string;
+      name: string;
+      title: string;
+      status: ToolCallStatus;
+      args: string;
+      result?: string;
+      error?: boolean;
+      ms?: number;
+    }
   | { id: string; kind: 'note'; text: string };
 
 const STATUS_LABEL: Record<ToolCallStatus, string> = {
@@ -109,11 +127,18 @@ export default function ChatPane() {
     void (async () => {
       try {
         const c = useStore.getState().agent;
+        const demo = c.demo !== 'off';
         const agent = await createNoteAgent({
           baseURL: c.baseURL,
           apiKey: c.apiKey,
           model: c.model,
-          ...(c.demo ? { provider: createDemoProvider() } : {}),
+          ...(demo ? { provider: createDemoProvider(c.demo === 'write' ? 'write' : 'read') } : {}),
+          /*
+           * 写权限只有**一个判定的地方**（`tool-list.canWriteFiles`）——
+           * 设置页那句"它现在能用 N 个工具"是同一个函数算出来的，
+           * 两边各写一份迟早对不上，而对不上就是在骗人。
+           */
+          allowWrite: canWriteFiles(c),
           onPermission: askPermission,
         });
         if (!alive) {
@@ -186,8 +211,9 @@ export default function ChatPane() {
         setItems((p) => [
           ...p,
           {
-            id: ev.toolCallId,
+            id: nextId(),
             kind: 'tool',
+            callId: ev.toolCallId,
             name: ev.name,
             title: ev.title,
             status: 'pending',
@@ -197,13 +223,13 @@ export default function ChatPane() {
         break;
       case 'tool_status':
         setItems((p) =>
-          p.map((i) => (i.id === ev.toolCallId && i.kind === 'tool' ? { ...i, status: ev.status } : i)),
+          p.map((i) => (i.kind === 'tool' && i.callId === ev.toolCallId ? { ...i, status: ev.status } : i)),
         );
         break;
       case 'tool_result':
         setItems((p) =>
           p.map((i) =>
-            i.id === ev.toolCallId && i.kind === 'tool'
+            i.kind === 'tool' && i.callId === ev.toolCallId
               ? {
                   ...i,
                   status: ev.isError ? 'failed' : 'completed',
@@ -254,11 +280,17 @@ export default function ChatPane() {
     runRef.current = null;
   };
 
-  const greeting = cfg.demo
-    ? '演示模式：不连模型，但它会真的去读你的仓库（list_notes → read_note）。'
-    : cfg.apiKey
-      ? `已配 ${cfg.model} @ ${cfg.baseURL}`
-      : '还没填 Key —— 去设置里填，或者把「演示模式」打开。';
+  // 跟设置页那条清单同一个函数算出来的 —— 空态这句话不能跟那里说两套
+  const canWrite = canWriteFiles(cfg);
+
+  const greeting =
+    cfg.demo === 'write'
+      ? '演示「写」：它会往 agent/演示-<今天>.md 追加一段，中途一定先问你一句。'
+      : cfg.demo === 'read'
+        ? '演示「读」：不连模型，但它会真的去读你的仓库（list_notes → read_note）。'
+        : cfg.apiKey
+          ? `已配 ${cfg.model} @ ${cfg.baseURL}${cfg.allowWrite ? ' · 能写（每次都会先问）' : ' · 只读'}`
+          : '还没填 Key —— 去设置里填，或者把演示打开。';
 
   return (
     <>
@@ -304,9 +336,11 @@ export default function ChatPane() {
             <div className="px-1 py-8 text-center">
               <p className="text-[12.5px] text-ink-2">问一句跟你的笔记有关的事。</p>
               <p className="mt-1.5 text-[11.5px] leading-relaxed text-ink-3">
-                它能用的只有三个只读工具：列出笔记、读一篇、全文搜一段。
-                <br />
-                <span className="font-mono">写</span>它干不了 —— 内核那边没给它写工具。
+                笔记能列、能读、能搜
+                {canWrite ? '，也能写（写之前一定先问你）' : ' —— 写工具现在是关的'}
+                ；书架上的书能列出、读某一章、书内搜、读你的批注。
+                {!canWrite && <br />}
+                {!canWrite && '不开写权限的话，它能说的全是"真的看到了什么"。'}
               </p>
             </div>
           )}
@@ -384,7 +418,7 @@ export default function ChatPane() {
             留着是因为"加写工具"那天它必须立刻能接上，而那时再写就来不及验了。
           */}
           {perm && (
-            <div data-agent-perm className="mt-3 rounded-[10px] border border-accent-line bg-accent-soft px-3 py-2.5">
+            <div data-agent-perm data-agent-perm-tool={perm.name} className="mt-3 rounded-[10px] border border-accent-line bg-accent-soft px-3 py-2.5">
               <p className="text-[12px] text-ink">要动这一步：{perm.title || perm.name}</p>
               <p className="mt-1 font-mono text-[10.5px] text-ink-3">{JSON.stringify(perm.args)}</p>
               <div className="mt-2 flex gap-1.5">

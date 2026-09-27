@@ -169,27 +169,40 @@ ok('对话框出来了', await page.isVisible('[data-settings-panel]'));
   ok('导航项有五颗', (await page.locator('[data-settings-nav-item]').count()) === 5);
 }
 
-step('AI 助手那一节：默认演示，不放假输入框');
+step('AI 助手那一节：演示三档 + 写权限 + 工具清单');
 {
   await page.click('[data-settings-nav-item="agent"]');
   await page.waitForTimeout(200);
   ok('切到 AI 助手', (await page.getAttribute('[data-settings-panel]', 'data-settings-tab')) === 'agent');
-  // 默认演示模式：那三个输入框**不该在** —— 填了也不生效，摆着就是骗人
-  ok('演示默认开着', (await page.getAttribute('[data-toggle="agent-demo"]', 'aria-checked')) === 'true');
-  ok('演示时没有 Key 输入框', (await page.locator('[data-agent-key]').count()) === 0);
-  ok('演示时说清了它演的是哪几步', (await page.textContent('[data-agent-demo-notes]')).includes('真的去读你的仓库'));
+  // 默认演示「读」：Key 那三个输入框**不该在** —— 填了也不生效，摆着就是骗人
+  ok('默认演示读', await page.evaluate(() => window.__suisui.getState().agent.demo === 'read'));
+  ok('演示时不给 Key 输入框', (await page.locator('[data-agent-key]').count()) === 0);
+  ok('九个工具全列出来了', (await page.locator('[data-agent-tool-row]').count()) === 9);
+  // 演示「读」那档没有写工具 —— 清单上得画掉，不能让人以为它能写
+  ok('演示读时写工具标了关', (await page.getAttribute('[data-agent-tool-row="write_note"]', 'data-on')) === '0');
+  ok('计数也是这么说的', (await page.textContent('[data-agent-tool-count]')).trim().startsWith('7 /'));
 
-  await page.click('[data-toggle="agent-demo"]');
+  await page.click('[data-demo="write"]');
   await page.waitForTimeout(200);
-  ok('关掉演示才给三个输入框', (await page.locator('[data-agent-key]').count()) === 1);
+  ok('演示写那档写工具就开了', (await page.getAttribute('[data-agent-tool-row="write_note"]', 'data-on')) === '1');
+  ok('计数跟着变九个', (await page.textContent('[data-agent-tool-count]')).trim().startsWith('9 /'));
+
+  await page.click('[data-demo="off"]');
+  await page.waitForTimeout(200);
+  ok('不演示才给三个输入框', (await page.locator('[data-agent-key]').count()) === 1);
   ok('地址给了默认值', (await page.inputValue('[data-agent-baseurl]')).startsWith('http'));
+  ok('写权限默认开着', (await page.getAttribute('[data-toggle="agent-write"]', 'aria-checked')) === 'true');
+  await page.click('[data-toggle="agent-write"]');
+  await page.waitForTimeout(200);
+  ok('关掉写权限，清单上两个写工具一起摘', (await page.getAttribute('[data-agent-tool-row="append_note"]', 'data-on')) === '0');
+
   await page.fill('[data-agent-model]', 'qwen-plus');
   await page.waitForTimeout(150);
   const st = await page.evaluate(() => window.__suisui.getState().agent);
   ok('填的模型进了 store', st.model === 'qwen-plus');
-  ok('演示开关真的翻了', st.demo === false);
+  ok('写权限真的翻了', st.allowWrite === false);
   // 还原：后面的用例不该接着一份改过的助手配置
-  await page.click('[data-toggle="agent-demo"]');
+  await page.evaluate(() => window.__suisui.getState().setAgent({ demo: 'read', allowWrite: true, model: 'gpt-4o-mini' }));
   await page.waitForTimeout(150);
 }
 

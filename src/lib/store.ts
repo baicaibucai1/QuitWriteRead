@@ -114,6 +114,17 @@ export type AgentSettings = {
   baseURL: string;
   apiKey: string;
   model: string;
+  /*
+   * 「拉取型号列表」拉回来的那一份。
+   *
+   * ⚠️ `modelsURL` 不是冗余 —— 它是**这份列表属于哪个地址**的凭据：
+   * 在 Agnes 拉来的列表，切到 DeepSeek 之后还摆在那儿，就是明晃晃的错
+   * （照着它选，端点回一个 422）。所以地址一变，这份列表立刻作废。
+   * `modelsAt` 是拉的时间 —— 缓存得能让人知道它有多旧。
+   */
+  models: string[];
+  modelsAt: string | null;
+  modelsURL: string;
 };
 
 export const DEFAULT_AGENT: AgentSettings = {
@@ -131,6 +142,10 @@ export const DEFAULT_AGENT: AgentSettings = {
   baseURL: 'https://api.deepseek.com/v1',
   apiKey: '',
   model: 'deepseek-chat',
+  // 型号列表是**拉来的**，不是给定的 —— 出厂时一份都没有
+  models: [],
+  modelsAt: null,
+  modelsURL: '',
 };
 
 /**

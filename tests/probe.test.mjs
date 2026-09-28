@@ -91,6 +91,36 @@ await ok('没填 Key：说"还没填 Key"，且**不打网络**', async () => {
   assert.match(r.message, /还没填 Key/);
 });
 
+/*
+ * 这一组看着刁钻，其实是**真事**：
+ * 有人把 Key 连着一句中文备注一起粘进来，浏览器在构造请求头那一步就抛了
+ * TypeError —— 而它跟断网 / CORS 长得一模一样。以前那句翻译会叫人
+ * "换个桌面端试试"，而桌面端也救不了几个非法字符。
+ */
+await ok('Key 里有中文：说清是字符放不进头里，且不打网络', async () => {
+  let called = 0;
+  const r = await probeModel(
+    { ...base, apiKey: 'sk-这是假的，别当真' },
+    { fetch: async () => { called++; return res(200)(); } },
+  );
+  assert.equal(called, 0, '连请求都构造不出来，不该发出去');
+  assert.equal(r.state, 'error');
+  assert.match(r.message, /中文|全角/);
+  assert.match(r.message, /拉丁字符/);
+  assert.doesNotMatch(r.message, /CORS|桌面端/, '别把人往网络那条路上引 —— 根本不是网络的事');
+});
+
+await ok('全角字符也算（不只是汉字）', async () => {
+  const r = await probeModel({ ...base, apiKey: 'sk-ａｂｃ' }, { fetch: res(200) });
+  assert.equal(r.state, 'error');
+  assert.match(r.message, /中文|全角/);
+});
+
+await ok('正常的 sk-… 不受影响', async () => {
+  const r = await probeModel({ ...base, apiKey: 'sk-abc123_-XYZ' }, { fetch: res(200, '', { data: [{ id: 'm' }] }) });
+  assert.equal(r.state, 'ok');
+});
+
 await ok('200 + 列表：ok 并把型号带回来', async () => {
   const r = await probeModel(base, { fetch: res(200, '', { data: [{ id: 'm2' }, { id: 'm1' }] }) });
   assert.equal(r.state, 'ok');

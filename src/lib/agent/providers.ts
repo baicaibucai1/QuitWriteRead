@@ -106,3 +106,25 @@ export function shortHost(baseURL: string): string {
   const m = /^https?:\/\/([^/]+)/.exec(baseURL.trim());
   return m ? m[1]! : baseURL;
 }
+
+/**
+ * 型号列表的搜索。
+ *
+ * **为什么要单独一个函数、放在能被 node 单测的这一层**：
+ * OpenRouter 那种一次回来几百个型号的时候，"能不能找到想要那个"全看这个框；
+ * 它要是写错了，界面上看起来只是"搜不出来"，没人会怀疑到过滤条件上。
+ *
+ * 规则只有一条：不区分大小写的子串匹配。空关键字原样返回（不算"没有匹配"）。
+ */
+export function matchModels(models: string[], query: string): string[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return models;
+  return models.filter((m) => m.toLowerCase().includes(q));
+}
+
+/**
+ * 列表一次最多摆多少个。
+ * 几百个型号全渲染一遍会卡一下，而人真正会看的通常只是前十几二十个 ——
+ * 剩下的交给上面那个搜索框。**摆出来的数要在界面上说清楚**，别让人以为这就是全部。
+ */
+export const MODEL_LIST_MAX = 60;

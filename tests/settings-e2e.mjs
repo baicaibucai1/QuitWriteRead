@@ -218,6 +218,113 @@ step('AI 助手那一节：选一家 → 填 Key → 试一下');
   await page.waitForTimeout(400);
   ok('试了一下给了结论', (await page.getAttribute('[data-probe-state]', 'data-probe-state')) === 'error');
   ok('说的是"还没填 Key"（不是甩一个 HTTP 码）', (await page.textContent('[data-probe-state]')).includes('还没填 Key'));
+  ok('没拉到过就不摆那个列表', (await page.locator('[data-model-list]').count()) === 0);
+  ok('拉失败的提示不抹掉以前拉到的（现在也确实没有）', (await page.locator('[data-model-pick]').count()) === 0);
+
+  /*
+   * ══ 真点一次「拉取」 ══
+   *
+   * 上面那段验的是"缺 Key 会怎么说"，这一段验的是**链路真的通**：
+   * 把网络拦掉冒充端点，看拉回来的型号有没有真的落进 store。
+   * 端到端里不该赌人家放不放行 CORS —— 拦掉之后它就是确定的。
+   */
+  /*
+   * Key 里混了中文/全角：浏览器连请求头都构造不出来，会抛一个跟断网一模一样的
+   * TypeError。以前那句翻译会教你"换个桌面端试试" —— 桌面端也救不了几个非法字符。
+   * 这条就是把这个坑钉在这儿。
+   */
+  await page.fill('[data-agent-key]', 'sk-这是假的，别当真');
+  await page.click('[data-agent-probe]');
+  await page.waitForTimeout(400);
+  ok('Key 带中文：直说是字符的问题', (await page.textContent('[data-probe-state]')).includes('中文'));
+  ok(
+    '而且**不**把人往网络那条路上引',
+    !(await page.textContent('[data-probe-state]')).includes('桌面端'),
+    (await page.textContent('[data-probe-state]')).slice(0, 40),
+  );
+
+  await page.fill('[data-agent-key]', 'sk-fake-key-for-tests');
+  /*
+   * ⚠️ fulfill 出来的响应要**自带 CORS 头**：这是浏览器在拦，不是 playwright 不发货；
+   *    带上 Authorization 的请求还会先抖一个 OPTIONS 预检，所以 Allow-Methods / Headers 也得给齐。
+   */
+  const CORS_OK = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+    'Access-Control-Allow-Headers': '*',
+  };
+  await page.route('**/models', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      headers: CORS_OK,
+      body: JSON.stringify({ data: [{ id: 'route-a' }, { id: 'route-b' }] }),
+    }),
+  );
+  await page.click('[data-agent-probe]');
+  await page.waitForFunction(() => window.__suisui.getState().agent.models.length > 0, { timeout: 15000 });
+  const got = await page.evaluate(() => window.__suisui.getState().agent.models);
+  ok('拉回来的型号真的进了 store', got.length === 2 && got[0] === 'route-a', got.join(','));
+  ok('那句结论是"连上了"', (await page.textContent('[data-probe-state]')).includes('连上了'));
+  ok('列表跟着出来了', (await page.locator('[data-model-pick]').count()) === 2);
+  ok('记下了是哪个地址拉的', await page.evaluate(() => window.__suisui.getState().agent.modelsURL === 'https://api.deepseek.com/v1'));
+  await page.unroute('**/models');
+  await page.click('[data-model-forget]'); // 下面要喂另一份，先清干净
+  await page.waitForTimeout(200);
+
+  /*
+   * ══ 列表那块怎么摆 ══
+   *
+   * 喂一份假列表进去，专门验界面：全摆出来了吗、能搜吗、选得上吗、能忘掉吗。
+   */
+  const SEED_MODELS = ['alpha-1', 'alpha-2', 'beta-7', 'gamma-max'];
+  await page.evaluate((list) => {
+    const s = window.__suisui.getState();
+    s.setAgent({ models: list, modelsAt: new Date().toISOString(), modelsURL: s.agent.baseURL.trim() });
+  }, SEED_MODELS);
+  await page.waitForTimeout(250);
+
+  ok('喂进去之后列表出来了', (await page.locator('[data-model-list]').count()) === 1);
+  ok('型号全摆着（不是只给前 12 个）', (await page.locator('[data-model-pick]').count()) === 4);
+  ok('总数写在那儿', (await page.textContent('[data-model-count]')).includes('共 4 个'));
+  ok(
+    '列表自己交代了来历与时间（不跟那次拉取的结论抢地方）',
+    (await page.textContent('[data-model-from]')).includes('4 个型号') &&
+      (await page.textContent('[data-model-from]')).includes('存在本机'),
+  );
+  ok('按钮变成"重新拉取"', (await page.textContent('[data-agent-probe]')).includes('重新拉取'));
+
+  await page.fill('[data-model-search]', 'alpha');
+  await page.waitForTimeout(200);
+  ok('一搜就只剩对得上的', (await page.locator('[data-model-pick]').count()) === 2);
+  ok('计数跟着改成 命中 / 总数', (await page.textContent('[data-model-count]')).includes('2 / 4'));
+
+  await page.fill('[data-model-search]', ''); // 清掉关键字，不然 beta-7 被自己筛掉了
+  await page.waitForTimeout(200);
+  await page.click('[data-model-pick="beta-7"]');
+  await page.waitForTimeout(200);
+  ok('点一下就选上了', (await page.inputValue('[data-agent-model]')) === 'beta-7');
+
+  await page.fill('[data-model-search]', '不存在的关键字');
+  await page.waitForTimeout(200);
+  ok('搜空了会直说（不是留个空框）', (await page.textContent('[data-model-list]')).includes('没有对得上的型号'));
+  await page.fill('[data-model-search]', '');
+
+  /*
+   * **这条是这套设计的关键**：cache 是跟地址绑的。
+   * 换一家/改了地址还摆着上一份，人照着它选，端点回的就是 422。
+   */
+  await page.fill('[data-agent-baseurl]', 'https://api.openai.com/v1');
+  await page.waitForTimeout(250);
+  ok('地址一改，那份列表就不作数了', (await page.locator('[data-model-list]').count()) === 0);
+  await page.fill('[data-agent-baseurl]', 'https://api.deepseek.com/v1');
+  await page.waitForTimeout(250);
+  ok('改回来又认了', (await page.locator('[data-model-list]').count()) === 1);
+
+  await page.click('[data-model-forget]');
+  await page.waitForTimeout(250);
+  ok('「忘掉」把本机那份清了', (await page.locator('[data-model-list]').count()) === 0);
+  ok('也真的从 store 里没了', await page.evaluate(() => window.__suisui.getState().agent.models.length === 0));
 
   ok('九个工具全列出来了', (await page.locator('[data-agent-tool-row]').count()) === 9);
   ok('写权限默认开着', (await page.getAttribute('[data-toggle="agent-write"]', 'aria-checked')) === 'true');
@@ -244,6 +351,10 @@ step('AI 助手那一节：选一家 → 填 Key → 试一下');
       prov: 'deepseek',
       baseURL: 'https://api.deepseek.com/v1',
       model: 'deepseek-chat',
+      // 上面那段喂的列表要清干净 —— 后面的用例不该接着一份假数据
+      models: [],
+      modelsAt: null,
+      modelsURL: '',
     }),
   );
   await page.waitForTimeout(150);

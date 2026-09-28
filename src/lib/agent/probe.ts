@@ -44,6 +44,19 @@ export const PROBE_IDLE: ProbeResult = { state: 'unknown', message: '', models: 
 const TIMEOUT_MS = 12_000;
 
 /**
+ * 这个 Key 放进请求头发不发得出去。
+ *
+ * HTTP 头的值只认 **ISO-8859-1 那 256 个字符**。粘 Key 的时候手一抖带进来
+ * 个中文逗号、全角冒号，浏览器连包都不发就在 `fetch()` 那一行抛 TypeError ——
+ * 而那句类型错误长得跟「断网 / CORS 不让过」一模一样，不先认出来就会被翻成
+ * "请求没到对面，要不换个桌面端试试"。**被人照着去做就白折腾了**，
+ * 因为问题从头到尾只是那几个字放不进 HTTP 头。
+ */
+export function headerUnsafe(key: string): boolean {
+  return /[^\u0000-\u00FF]/.test(key);
+}
+
+/**
  * 把一次失败翻译成一句人话。
  *
  * ⚠️ 要分开「对面不认」和「根本没到对面」：后者在浏览器里几乎总是 CORS 或断网，
@@ -96,15 +109,25 @@ export async function probeModel(
   const doFetch = opts.fetch ?? fetch;
   const base = cfg.baseURL.trim().replace(/\/+$/, '');
   const at = new Date().toISOString();
+  const key = cfg.apiKey.trim();
   if (!base) return { state: 'error', message: '还没填接口地址', models: [], at };
-  if (!cfg.apiKey.trim()) return { state: 'error', message: '还没填 Key', models: [], at };
+  if (!key) return { state: 'error', message: '还没填 Key', models: [], at };
+  // 这一条要排在发网络之前：它连请求都构造不出来，犯不上等那 12 秒
+  if (headerUnsafe(key)) {
+    return {
+      state: 'error',
+      message: 'Key 里有中文 / 全角这类字符 —— HTTP 头只放得下拉丁字符，多半是复制的时候多带了几个字',
+      models: [],
+      at,
+    };
+  }
 
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   try {
     const res = await doFetch(`${base}/models`, {
       method: 'GET',
-      headers: { Authorization: `Bearer ${cfg.apiKey.trim()}` },
+      headers: { Authorization: `Bearer ${key}` },
       signal: ctrl.signal,
     });
     if (res.ok) {

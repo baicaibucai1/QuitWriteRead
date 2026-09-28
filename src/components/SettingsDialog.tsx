@@ -5,7 +5,7 @@ import type { SettingsTab } from '../lib/store';
 // ⚠️ 从 tool-list 这一层 import，别从 `lib/agent` —— 后者会把整个内核拖进设置这块
 import { AGENT_TOOLS, canWriteFiles, countUsableTools } from '../lib/agent/tool-list';
 // 这两层都是**零依赖**的（表名 + 纯函数），不会把内核拖进设置这块包
-import { PROVIDER_PRESETS, defaultModelOf, presetOf } from '../lib/agent/providers';
+import { PROVIDER_PRESETS, MODEL_LIST_MAX, defaultModelOf, matchModels, presetOf } from '../lib/agent/providers';
 import { PROBE_IDLE, probeModel, type ProbeResult } from '../lib/agent/probe';
 import { PROVIDERS } from '../lib/providers';
 import type { ProviderId } from '../lib/providers';
@@ -57,6 +57,19 @@ const DEMO_HINT: Record<DemoMode, string> = {
     '演示「写」：会往 agent/演示-<今天>.md 追加一段，而且中途**一定先问你一句** —— 这一档存在的理由就是让你亲眼确认「点了允许 → 文件真的变了」。点了拒绝它就没动，那种时候它也不会说"写好了"。',
   off: '演示关了：下面三个字段填完才算接上了模型。',
 };
+
+/*
+ * 「什么时候拉的」。
+ * 本机那份列表是**缓存**，缓存就得让人知道它有多旧 ——
+ * 不写时间的话，人看着一份上周的列表，会以为就是现在这家报的。
+ */
+function whenPulled(at: string | null): string {
+  if (!at) return '';
+  const d = new Date(at);
+  if (Number.isNaN(d.getTime())) return '';
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
 
 function IconOf({ id }: { id: SettingsTab }) {
   if (id === 'general') return <FileText size={13} />;
@@ -755,21 +768,30 @@ function Agent() {
   const agent = useStore((s) => s.agent);
   const setAgent = useStore((s) => s.setAgent);
   const [probe, setProbe] = useState<ProbeResult>(PROBE_IDLE);
+  /** 在那个型号列表里搜什么。跟着 aspiration 走：几百个型号时它就是唯一的找法 */
+  const [mq, setMq] = useState('');
 
   // ⚠️ 跟 ChatPane 装配时用同一个函数 —— 见 tool-list.ts 里那条注释
   const writing = canWriteFiles(agent);
   const preset = presetOf(agent.prov);
 
+  /*
+   * 手上这份列表**还算不算数**。
+   * 判据是地址而不是"选了哪一家"：人可以手改地址走代理，
+   * 改了之后上一份是另一个端点报的，摆在这儿就是在骗人。
+   */
+  const normURL = (u: string) => u.trim().replace(/\/+$/, '');
+  const pulled = agent.models.length > 0 && agent.modelsURL === normURL(agent.baseURL);
+
   /** 地址被手改过 —— 那"这一家"的名号就只是"从哪儿开始填"，不作数了 */
-  const urlEdited =
-    agent.prov !== 'custom' && agent.baseURL.trim().replace(/\/+$/, '') !== preset.baseURL;
+  const urlEdited = agent.prov !== 'custom' && normURL(agent.baseURL) !== preset.baseURL;
 
   const pickProvider = (id: string) => {
     const p = presetOf(id);
     /*
      * 「自定义」不动地址：人可能刚手填了一半，清空了是把人写到一半的东西扔掉。
      * 其余各家连地址带默认型号一起给 —— 型号拿得到才给，拿不到（比如 OpenRouter
-     * 有几百个）就留着现在这个，等「试一下」把真实列表带回来。
+     * 有几百个）就留着现在这个，等「拉取」把真实列表带回来。
      */
     setAgent(
       id === 'custom'
@@ -779,13 +801,33 @@ function Agent() {
     setProbe(PROBE_IDLE); // 换了一家，上一次"通了"的结论就不成立了
   };
 
-  const tryIt = async () => {
-    setProbe({ state: 'probing', message: '正在试…', models: [], at: null });
-    setProbe(await probeModel({ baseURL: agent.baseURL, apiKey: agent.apiKey, model: agent.model }));
+  /*
+   * 拉取型号列表。
+   *
+   * 它就是那个「试一下」—— 同一个 `/models` 请求，**既是自检也是拉列表**：
+   * 拉到了就证明通了（顺带宽回来真实型号），拉不到那条人话说的就是为什么不通。
+   * ⛔ 不分成两颗按钮：同一个地址让人点两遍，第二次点的时候人一定会问
+   *    "这俩有什么区别"。
+   */
+  const pull = async () => {
+    setProbe({ state: 'probing', message: '正在拉…', models: [], at: null });
+    const r = await probeModel({ baseURL: agent.baseURL, apiKey: agent.apiKey, model: agent.model });
+    setProbe(r);
+    /*
+     * ⚠️ 拉失败**不清掉**本机那份旧的：
+     * 一次网络抖动就把人存着的列表抹了，是最糟的那种"贴心"。
+     * 只有真的拉到东西才覆盖（连上了但这家不报列表 → 保持原样）。
+     */
+    if (r.state === 'ok' && r.models.length) {
+      setAgent({ models: r.models, modelsAt: r.at, modelsURL: normURL(agent.baseURL) });
+      setMq('');
+    }
   };
 
-  /** 型号候选：试一下拿回来的是真的，没试过就先用这一家常那几个 */
-  const chips = probe.models.length ? probe.models : preset.models;
+  /** 型号候选：常用那几个（真列表没拉到时也还能选） */
+  const chips = preset.models;
+  /** 搜出来的那些。空的 query 就是全部 */
+  const found = matchModels(agent.models, mq);
 
   return (
     <Section
@@ -863,7 +905,7 @@ function Agent() {
           </label>
           {chips.length > 0 && (
             <div data-model-chips className="flex flex-wrap gap-1">
-              {chips.slice(0, 12).map((m) => (
+              {chips.map((m) => (
                 <button
                   key={m}
                   type="button"
@@ -883,8 +925,8 @@ function Agent() {
           )}
 
           {/*
-            试一下：**点一下就知道通不通，不通还知道为什么不通**。
-            打的是 `/models` —— 便宜、不烧 token，顺手把真实型号列表带回来。
+            拉取型号列表：**点一下就知道通不通，通了就把真实列表带回来**。
+            打的是 `/models` —— 便宜、不烧 token；拉到了自然就证明 connected。
             失败那句话由 `probe.ts` 翻译（401 / 404 / 429 / CORS 各有各的说法），
             这里不重写一遍 —— 两处各写一份迟早对不上。
           */}
@@ -892,12 +934,12 @@ function Agent() {
             <button
               type="button"
               data-agent-probe
-              onClick={() => void tryIt()}
+              onClick={() => void pull()}
               disabled={probe.state === 'probing'}
               className="inline-flex shrink-0 items-center gap-1 rounded-[8px] border border-line bg-surface-2 px-2.5 py-[5px] text-[11.5px] text-ink-2 transition-colors hover:bg-surface-3 hover:text-ink disabled:opacity-40 disabled:pointer-events-none"
             >
               <Refresh size={11.5} className={probe.state === 'probing' ? 'animate-spin' : ''} />
-              {probe.state === 'probing' ? '正在试…' : '试一下'}
+              {probe.state === 'probing' ? '正在拉…' : pulled ? '重新拉取' : '拉取型号列表'}
             </button>
             <span
               data-probe-state={probe.state}
@@ -910,9 +952,87 @@ function Agent() {
               }`}
             >
               {probe.message ||
-                (probe.state === 'unknown' ? '打 /models 试一下 —— 不烧 token，顺手把型号列表带回来' : '')}
+                (pulled
+                  ? '要最新的那份就再拉一次'
+                  : '打 /models 拉一次 —— 不烧 token，拉到了就说明通了')}
             </span>
           </div>
+
+          {/*
+            拉回来的那份列表。**只在真的拉到过、而且地址还是拉的时候那个时出现** ——
+            换一家或改了地址之后还摆着它，就是在让人照着它选一个人家压根没有的型号。
+          */}
+          {pulled && (
+            <div data-model-list className="rounded-[9px] border border-line bg-surface-2 p-2">
+              {/*
+                这份列表的来历。**单独占一行，不跟上面那次拉取的结论抢地方** ——
+                拉失败过一次之后，那一行会一直写着失败原因，而"本机还存着 N 个"
+                这条信息照样得让人看见。
+              */}
+              <p data-model-from className="mb-1.5 px-1 text-[10.5px] text-ink-3">
+                端点报的 {agent.models.length} 个型号{agent.modelsAt ? ` · ${whenPulled(agent.modelsAt)}拉回来` : ''}
+                ，存在本机，没再联网
+              </p>
+              <div className="flex items-center gap-2">
+                <input
+                  data-model-search
+                  type="text"
+                  value={mq}
+                  onChange={(e) => setMq(e.target.value)}
+                  placeholder="在这堆型号里搜"
+                  className="min-w-0 flex-1 rounded-[7px] border border-line bg-surface px-2 py-[4px] font-mono text-[11px] text-ink outline-none transition-colors placeholder:text-ink-3 focus:border-accent"
+                />
+                <span data-model-count className="shrink-0 text-[10.5px] text-ink-3">
+                  {mq.trim() ? `${found.length} / ${agent.models.length}` : `共 ${agent.models.length} 个`}
+                </span>
+                {/*
+                  「忘掉」：记住了就得能不记住。
+                  本机那份是缓存，缓存就得有出口 —— 否则人换地址之后只能干瞪眼。
+                */}
+                <button
+                  type="button"
+                  data-model-forget
+                  onClick={() => {
+                    setAgent({ models: [], modelsAt: null, modelsURL: '' });
+                    setProbe(PROBE_IDLE);
+                    setMq('');
+                  }}
+                  className="shrink-0 rounded-[7px] px-1.5 py-[3px] text-[10.5px] text-ink-3 transition-colors hover:bg-surface-3 hover:text-ink"
+                >
+                  忘掉
+                </button>
+              </div>
+              {found.length === 0 ? (
+                <p className="mt-1.5 px-1 text-[11px] text-ink-3">没有对得上的型号 —— 换个词试试。</p>
+              ) : (
+                <>
+                  <div className="mt-1.5 flex max-h-[132px] flex-wrap gap-1 overflow-y-auto">
+                    {found.slice(0, MODEL_LIST_MAX).map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        data-model-pick={m}
+                        data-on={agent.model === m ? '1' : '0'}
+                        onClick={() => setAgent({ model: m })}
+                        className={`rounded-full border px-2 py-[3px] font-mono text-[10.5px] transition-colors ${
+                          agent.model === m
+                            ? 'border-accent-line bg-accent-soft font-medium text-accent'
+                            : 'border-line bg-surface text-ink-2 hover:text-ink'
+                        }`}
+                      >
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+                  {found.length > MODEL_LIST_MAX && (
+                    <p className="mt-1 px-1 text-[10.5px] text-ink-3">
+                      先摆了前 {MODEL_LIST_MAX} 个 —— 剩下 {found.length - MODEL_LIST_MAX} 个用上面那个框搜更快。
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
+          )}
           <Hint>
             走的是 OpenAI 兼容那一套（<span className="font-mono">/chat/completions</span>），
             换一家改地址就行。⚠️ 浏览器直连要端点放行 CORS ——

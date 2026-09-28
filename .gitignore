@@ -3,6 +3,8 @@ dist/
 # vite build 会先清空 dist，而沙箱的 safe-delete 守卫拦「一次删 >50 项」，
 # 于是构建前只能把旧 dist 改名让开（见 README）。这些别名目录同样不该进版本库。
 dist-stale-*/
+# 有时改名的窗口里目录被占着挪不动，就只剩这个名字了 —— 同理
+dist-old-*/
 # 带时间戳的别名目录同理（`scripts/build.mjs` 清不掉旧的暂存目录时会换这个名字）
 .dist-staging*/
 .env.local

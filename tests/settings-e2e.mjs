@@ -169,40 +169,71 @@ ok('对话框出来了', await page.isVisible('[data-settings-panel]'));
   ok('导航项有五颗', (await page.locator('[data-settings-nav-item]').count()) === 5);
 }
 
-step('AI 助手那一节：演示三档 + 写权限 + 工具清单');
+step('AI 助手那一节：选一家 → 填 Key → 试一下');
 {
   await page.click('[data-settings-nav-item="agent"]');
   await page.waitForTimeout(200);
   ok('切到 AI 助手', (await page.getAttribute('[data-settings-panel]', 'data-settings-tab')) === 'agent');
-  // 默认演示「读」：Key 那三个输入框**不该在** —— 填了也不生效，摆着就是骗人
-  ok('默认演示读', await page.evaluate(() => window.__suisui.getState().agent.demo === 'read'));
-  ok('演示时不给 Key 输入框', (await page.locator('[data-agent-key]').count()) === 0);
+  /*
+   * 默认**不演示**。上一版默认演示「读」，结果人打开助手问一句，它按脚本答一句
+   * 跟问题无关的话 —— 看着像在工作，其实根本没连模型。没配就是没配。
+   */
+  ok('默认不演示', await page.evaluate(() => window.__suisui.getState().agent.demo === 'off'));
+  ok('所以一上来就给 Key 输入框', (await page.locator('[data-agent-key]').count()) === 1);
+  ok('服务商七颗可选', (await page.locator('[data-provider]').count()) === 7);
+  ok('默认选中 DeepSeek', (await page.getAttribute('[data-provider="deepseek"]', 'data-on')) === '1');
+  ok(
+    '地址跟着那一家走（不用人记 /v1 这种）',
+    (await page.inputValue('[data-agent-baseurl]')) === 'https://api.deepseek.com/v1',
+  );
+  ok('型号也跟着', (await page.inputValue('[data-agent-model]')) === 'deepseek-chat');
+  ok('常用型号摆成了可点的', (await page.locator('[data-model-chip]').count()) === 2);
+
+  // 换一家：连地址带型号一起换 —— 这几家地址长得都不一样，手填一次错一次
+  await page.click('[data-provider="qwen"]');
+  await page.waitForTimeout(200);
+  ok(
+    '换通义：地址整条换了',
+    (await page.inputValue('[data-agent-baseurl]')) === 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  );
+  ok('型号也换成它家的', (await page.inputValue('[data-agent-model]')) === 'qwen-plus');
+
+  /*
+   * 试一下。**没填 Key 时不打网络** —— 这条要验的是"它会直说还没填 Key"，
+   * 而不是甩一句看不懂的失败。
+   */
+  await page.click('[data-agent-probe]');
+  await page.waitForTimeout(400);
+  ok('试了一下给了结论', (await page.getAttribute('[data-probe-state]', 'data-probe-state')) === 'error');
+  ok('说的是"还没填 Key"（不是甩一个 HTTP 码）', (await page.textContent('[data-probe-state]')).includes('还没填 Key'));
+
   ok('九个工具全列出来了', (await page.locator('[data-agent-tool-row]').count()) === 9);
-  // 演示「读」那档没有写工具 —— 清单上得画掉，不能让人以为它能写
-  ok('演示读时写工具标了关', (await page.getAttribute('[data-agent-tool-row="write_note"]', 'data-on')) === '0');
-  ok('计数也是这么说的', (await page.textContent('[data-agent-tool-count]')).trim().startsWith('7 /'));
-
-  await page.click('[data-demo="write"]');
-  await page.waitForTimeout(200);
-  ok('演示写那档写工具就开了', (await page.getAttribute('[data-agent-tool-row="write_note"]', 'data-on')) === '1');
-  ok('计数跟着变九个', (await page.textContent('[data-agent-tool-count]')).trim().startsWith('9 /'));
-
-  await page.click('[data-demo="off"]');
-  await page.waitForTimeout(200);
-  ok('不演示才给三个输入框', (await page.locator('[data-agent-key]').count()) === 1);
-  ok('地址给了默认值', (await page.inputValue('[data-agent-baseurl]')).startsWith('http'));
   ok('写权限默认开着', (await page.getAttribute('[data-toggle="agent-write"]', 'aria-checked')) === 'true');
+  ok('所以计数是九个', (await page.textContent('[data-agent-tool-count]')).trim().startsWith('9 /'));
   await page.click('[data-toggle="agent-write"]');
   await page.waitForTimeout(200);
   ok('关掉写权限，清单上两个写工具一起摘', (await page.getAttribute('[data-agent-tool-row="append_note"]', 'data-on')) === '0');
+  ok('计数跟着变七个', (await page.textContent('[data-agent-tool-count]')).trim().startsWith('7 /'));
 
-  await page.fill('[data-agent-model]', 'qwen-plus');
-  await page.waitForTimeout(150);
+  // 演示三档：它是退路，不再抢在前面 —— 选了演示，Key 那一片就不该摆着
+  ok('演示三档还在', (await page.locator('[data-demo]').count()) === 3);
+  await page.click('[data-demo="write"]');
+  await page.waitForTimeout(200);
+  ok('选了演示写，写工具就开了', (await page.getAttribute('[data-agent-tool-row="write_note"]', 'data-on')) === '1');
+  ok('演示时不摆 Key 输入框（填了也不生效）', (await page.locator('[data-agent-key]').count()) === 0);
+
   const st = await page.evaluate(() => window.__suisui.getState().agent);
-  ok('填的模型进了 store', st.model === 'qwen-plus');
   ok('写权限真的翻了', st.allowWrite === false);
   // 还原：后面的用例不该接着一份改过的助手配置
-  await page.evaluate(() => window.__suisui.getState().setAgent({ demo: 'read', allowWrite: true, model: 'gpt-4o-mini' }));
+  await page.evaluate(() =>
+    window.__suisui.getState().setAgent({
+      demo: 'off',
+      allowWrite: true,
+      prov: 'deepseek',
+      baseURL: 'https://api.deepseek.com/v1',
+      model: 'deepseek-chat',
+    }),
+  );
   await page.waitForTimeout(150);
 }
 

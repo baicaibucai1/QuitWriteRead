@@ -4,6 +4,9 @@ import { BRANCH, OWNER, REPO, useStore, type DemoMode } from '../lib/store';
 import type { SettingsTab } from '../lib/store';
 // ⚠️ 从 tool-list 这一层 import，别从 `lib/agent` —— 后者会把整个内核拖进设置这块
 import { AGENT_TOOLS, canWriteFiles, countUsableTools } from '../lib/agent/tool-list';
+// 这两层都是**零依赖**的（表名 + 纯函数），不会把内核拖进设置这块包
+import { PROVIDER_PRESETS, defaultModelOf, presetOf } from '../lib/agent/providers';
+import { PROBE_IDLE, probeModel, type ProbeResult } from '../lib/agent/probe';
 import { PROVIDERS } from '../lib/providers';
 import type { ProviderId } from '../lib/providers';
 import { hasDavTransport } from '../lib/providers';
@@ -737,57 +740,83 @@ function Sync() {
   );
 }
 
-/* ── AI 助手：接哪家模型、准不准它动笔记 ── */
+/*
+ * ── AI 助手：接哪家模型、准不准它动笔记 ──
+ *
+ * 这一节的顺序是**照着"接一个模型"这件事的顺序**排的：
+ *   选一家 → 填 Key → 确认地址 → 定型号 → 试一下。
+ * 每一步都在回答上一步留下的问题，而不是把七个字段平铺在那儿让人自己猜。
+ *
+ * ⚠️ 换一家就**连地址带型号一起换**（`pickProvider`）：
+ *    这几家的地址长得都不一样（`/v1` / `/compatible-mode/v1` / `/api/paas/v4`），
+ *    让人手填一次错一次，而错了的表现只是"连不上"三个字。
+ */
 function Agent() {
   const agent = useStore((s) => s.agent);
   const setAgent = useStore((s) => s.setAgent);
+  const [probe, setProbe] = useState<ProbeResult>(PROBE_IDLE);
 
   // ⚠️ 跟 ChatPane 装配时用同一个函数 —— 见 tool-list.ts 里那条注释
   const writing = canWriteFiles(agent);
+  const preset = presetOf(agent.prov);
+
+  /** 地址被手改过 —— 那"这一家"的名号就只是"从哪儿开始填"，不作数了 */
+  const urlEdited =
+    agent.prov !== 'custom' && agent.baseURL.trim().replace(/\/+$/, '') !== preset.baseURL;
+
+  const pickProvider = (id: string) => {
+    const p = presetOf(id);
+    /*
+     * 「自定义」不动地址：人可能刚手填了一半，清空了是把人写到一半的东西扔掉。
+     * 其余各家连地址带默认型号一起给 —— 型号拿得到才给，拿不到（比如 OpenRouter
+     * 有几百个）就留着现在这个，等「试一下」把真实列表带回来。
+     */
+    setAgent(
+      id === 'custom'
+        ? { prov: 'custom' }
+        : { prov: id, baseURL: p.baseURL, model: defaultModelOf(id) || agent.model },
+    );
+    setProbe(PROBE_IDLE); // 换了一家，上一次"通了"的结论就不成立了
+  };
+
+  const tryIt = async () => {
+    setProbe({ state: 'probing', message: '正在试…', models: [], at: null });
+    setProbe(await probeModel({ baseURL: agent.baseURL, apiKey: agent.apiKey, model: agent.model }));
+  };
+
+  /** 型号候选：试一下拿回来的是真的，没试过就先用这一家常那几个 */
+  const chips = probe.models.length ? probe.models : preset.models;
 
   return (
     <Section
       title="AI 助手"
-      intro="顶栏那颗星打开它。笔记能读能写，书架上的书能读 —— 一共九个工具，下面列全了。"
+      intro="右栏那一页里问它（顶栏那颗星把右栏翻过去）。笔记能读能写，书架上的书能读 —— 一共九个工具，下面列全了。"
     >
-      {/*
-        演示三档。**互斥的一组**，做成 pill 而不是三个开关 ——
-        一次只能走一条路，开关会让人以为能同时演示读又演示写。
-      */}
-      <div className="mb-1 mt-0.5 text-[11.5px] text-ink-3">不连模型时走哪套脚本</div>
-      <div data-demo-list className="flex flex-wrap gap-1.5">
-        {DEMO_MODES.map((d) => (
+      {/* 一、选一家 */}
+      <div className="mb-1 mt-0.5 text-[11.5px] text-ink-3">服务商</div>
+      <div data-provider-list className="flex flex-wrap gap-1.5">
+        {PROVIDER_PRESETS.map((p) => (
           <button
-            key={d.id}
+            key={p.id}
             type="button"
-            data-demo={d.id}
-            onClick={() => setAgent({ demo: d.id })}
-            title={d.hint}
+            data-provider={p.id}
+            data-on={agent.prov === p.id ? '1' : '0'}
+            onClick={() => pickProvider(p.id)}
+            title={p.baseURL || '地址自己填'}
             className={`rounded-full border px-2.5 py-[4px] text-[12px] transition-colors ${
-              agent.demo === d.id
+              agent.prov === p.id
                 ? 'border-accent-line bg-accent-soft font-medium text-accent'
                 : 'border-line bg-surface-2 text-ink-2 hover:text-ink'
             }`}
           >
-            {d.label}
+            {p.label}
           </button>
         ))}
       </div>
-      <Hint>{DEMO_HINT[agent.demo]}</Hint>
 
       {agent.demo === 'off' && (
         <div className="mt-3 space-y-1.5">
-          <label className="block">
-            <span className="mb-[3px] block text-[11px] text-ink-3">接口地址</span>
-            <input
-              data-agent-baseurl
-              type="text"
-              value={agent.baseURL}
-              onChange={(e) => setAgent({ baseURL: e.target.value })}
-              placeholder="https://api.openai.com/v1"
-              className="w-full rounded-[8px] border border-line bg-surface-2 px-2.5 py-[7px] font-mono text-[11.5px] text-ink outline-none transition-colors placeholder:text-ink-3 focus:border-accent focus:bg-surface"
-            />
-          </label>
+          {/* 二、Key —— 接不接得上，九成卡在这儿 */}
           <label className="block">
             <span className="mb-[3px] block text-[11px] text-ink-3">API Key</span>
             <input
@@ -799,6 +828,28 @@ function Agent() {
               className="w-full rounded-[8px] border border-line bg-surface-2 px-2.5 py-[7px] font-mono text-[11.5px] text-ink outline-none transition-colors placeholder:text-ink-3 focus:border-accent focus:bg-surface"
             />
           </label>
+          <Hint>Key 在哪拿：{preset.keyHint}。</Hint>
+
+          {/* 三、地址 —— 选那一家时已经填好了，留着给人改（走代理 / 换区域） */}
+          <label className="block">
+            <span className="mb-[3px] block text-[11px] text-ink-3">接口地址</span>
+            <input
+              data-agent-baseurl
+              type="text"
+              value={agent.baseURL}
+              onChange={(e) => setAgent({ baseURL: e.target.value })}
+              placeholder="https://api.openai.com/v1"
+              className="w-full rounded-[8px] border border-line bg-surface-2 px-2.5 py-[7px] font-mono text-[11.5px] text-ink outline-none transition-colors placeholder:text-ink-3 focus:border-accent focus:bg-surface"
+            />
+          </label>
+          {urlEdited && (
+            <Hint>
+              地址改过了（不是 {preset.label} 的默认地址）—— 上面那颗药丸只是"从哪家开始填"，
+              实际连的是这儿填的这个。
+            </Hint>
+          )}
+
+          {/* 四、型号 + 试一下 */}
           <label className="block">
             <span className="mb-[3px] block text-[11px] text-ink-3">模型</span>
             <input
@@ -806,13 +857,65 @@ function Agent() {
               type="text"
               value={agent.model}
               onChange={(e) => setAgent({ model: e.target.value })}
-              placeholder="gpt-4o-mini"
+              placeholder="deepseek-chat"
               className="w-full rounded-[8px] border border-line bg-surface-2 px-2.5 py-[7px] font-mono text-[11.5px] text-ink outline-none transition-colors placeholder:text-ink-3 focus:border-accent focus:bg-surface"
             />
           </label>
+          {chips.length > 0 && (
+            <div data-model-chips className="flex flex-wrap gap-1">
+              {chips.slice(0, 12).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  data-model-chip={m}
+                  data-on={agent.model === m ? '1' : '0'}
+                  onClick={() => setAgent({ model: m })}
+                  className={`rounded-full border px-2 py-[3px] font-mono text-[10.5px] transition-colors ${
+                    agent.model === m
+                      ? 'border-accent-line bg-accent-soft font-medium text-accent'
+                      : 'border-line bg-surface-2 text-ink-2 hover:text-ink'
+                  }`}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/*
+            试一下：**点一下就知道通不通，不通还知道为什么不通**。
+            打的是 `/models` —— 便宜、不烧 token，顺手把真实型号列表带回来。
+            失败那句话由 `probe.ts` 翻译（401 / 404 / 429 / CORS 各有各的说法），
+            这里不重写一遍 —— 两处各写一份迟早对不上。
+          */}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              data-agent-probe
+              onClick={() => void tryIt()}
+              disabled={probe.state === 'probing'}
+              className="inline-flex shrink-0 items-center gap-1 rounded-[8px] border border-line bg-surface-2 px-2.5 py-[5px] text-[11.5px] text-ink-2 transition-colors hover:bg-surface-3 hover:text-ink disabled:opacity-40 disabled:pointer-events-none"
+            >
+              <Refresh size={11.5} className={probe.state === 'probing' ? 'animate-spin' : ''} />
+              {probe.state === 'probing' ? '正在试…' : '试一下'}
+            </button>
+            <span
+              data-probe-state={probe.state}
+              className={`min-w-0 flex-1 text-[11px] leading-snug ${
+                probe.state === 'ok'
+                  ? 'text-ink-2'
+                  : probe.state === 'error'
+                    ? 'text-danger'
+                    : 'text-ink-3'
+              }`}
+            >
+              {probe.message ||
+                (probe.state === 'unknown' ? '打 /models 试一下 —— 不烧 token，顺手把型号列表带回来' : '')}
+            </span>
+          </div>
           <Hint>
             走的是 OpenAI 兼容那一套（<span className="font-mono">/chat/completions</span>），
-            换国内几家改地址就行。⚠️ 浏览器直连要端点放行 CORS ——
+            换一家改地址就行。⚠️ 浏览器直连要端点放行 CORS ——
             不放行的会连不上，那种情况得用桌面端（那边的请求可以走本地代理）。
           </Hint>
 
@@ -831,6 +934,34 @@ function Agent() {
           </div>
         </div>
       )}
+
+      {/*
+        演示三档。**互斥的一组**，做成 pill 而不是三个开关 ——
+        一次只能走一条路，开关会让人以为能同时演示读又演示写。
+        ⚠️ 放在最后：它是"没法接模型时的退路"，不是这一节的主角。
+      */}
+      <div className="mt-4 border-t border-line pt-3">
+        <div className="mb-1 text-[11.5px] text-ink-3">不接模型时，走哪套脚本</div>
+        <div data-demo-list className="flex flex-wrap gap-1.5">
+          {DEMO_MODES.map((d) => (
+            <button
+              key={d.id}
+              type="button"
+              data-demo={d.id}
+              onClick={() => setAgent({ demo: d.id })}
+              title={d.hint}
+              className={`rounded-full border px-2.5 py-[4px] text-[12px] transition-colors ${
+                agent.demo === d.id
+                  ? 'border-accent-line bg-accent-soft font-medium text-accent'
+                  : 'border-line bg-surface-2 text-ink-2 hover:text-ink'
+              }`}
+            >
+              {d.label}
+            </button>
+          ))}
+        </div>
+        <Hint>{DEMO_HINT[agent.demo]}</Hint>
+      </div>
 
       {/* 工具清单：**界面上说它能干什么，就得真是那些** —— 两边是从同一份名字表来的 */}
       <div className="mt-4 border-t border-line pt-3">
@@ -863,8 +994,9 @@ function Agent() {
           写都是<b className="font-medium text-ink-2">改界面上那一份</b>（不是另写到磁盘），
           所以写完文件树和编辑器立刻跟着变，不用你去刷新。
           Key 跟同步的 token 一个待遇：现在在本机 localStorage，正式版要进系统凭据库。
-          改完这几项<b className="font-medium text-ink-2">下次打开助手才生效</b>
-          —— 工具是建实例那会儿装好的，中途换不掉。
+          改完这几项<b className="font-medium text-ink-2">关掉这个面板就生效</b> ——
+          地址 / Key / 写权限要重建一次（工具是建实例那会儿装好的），
+          只改型号的话当场就换，聊到一半也不会断。
         </Hint>
       </div>
     </Section>

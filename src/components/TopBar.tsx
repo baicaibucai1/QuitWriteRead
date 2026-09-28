@@ -58,10 +58,33 @@ export default function TopBar() {
   const rightOpen = useStore((s) => s.rightOpen);
   const setRightOpen = useStore((s) => s.setRightOpen);
   const setPickedDir = useStore((s) => s.setPickedDir);
-  const agentPane = useStore((s) => s.agentPane);
-  const setAgentPane = useStore((s) => s.setAgentPane);
+  const rightTab = useStore((s) => s.rightTab);
+  const setRightTab = useStore((s) => s.setRightTab);
 
   const reading = side === 'read';
+
+  /*
+   * 助手不再是浮层，是**右栏的一页**（`RightPane` 那排签）。
+   * 所以这颗星翻的就是那个签：
+   *   · 右栏收着 / 停在大纲页 → 展开右栏并翻到助手；
+   *   · 已经停在助手页     → 收起右栏（这颗星把它叫出来的，就由它送回去）。
+   * ⛔ 不另外开一扇门 —— 两个入口会出现"点了星、签没动"这种对不上的状态。
+   */
+  const onAgent = rightOpen && rightTab === 'agent';
+  const toggleAgent = () => {
+    if (onAgent) {
+      setRightOpen(false);
+      return;
+    }
+    setRightTab('agent');
+    setRightOpen(true);
+  };
+
+  /*
+   * 正读着一本书时右栏整条换成那本书的目录 + 批注（没有那排签），
+   * 这时候这颗星按下去不会有任何事发生 —— 那就别给它。
+   */
+  const bookAside = reading && !!currentBook;
 
   /*
    * 面包屑：目录一段一段，最后一段是文件名。
@@ -140,28 +163,29 @@ export default function TopBar() {
       {/* ── 右：这一屏摊开到什么程度 + 助手 ── */}
       <div className="flex shrink-0 items-center gap-1">
         {/*
-          「助手」：开那个面板。
-          手机上照样给 —— 它不依赖任何一栏，读的是整个仓库；
-          而手机上收栏箭头不出现，是因为那两栏本身就不存在。
+          两颗收栏箭头跟助手那颗星**同生同灭**：都只在桌面（≥768px）出现。
+          手机上右栏整条不渲染，助手也就没有地方长 —— 那颗星给了就是一颗
+          按了没反应的按钮。读着一本书时同理（右栏换成了书的目录）。
         */}
-        <button
-          type="button"
-          data-agent-toggle
-          data-on={agentPane ? '1' : '0'}
-          onClick={() => setAgentPane(!agentPane)}
-          aria-pressed={agentPane}
-          title="AI 助手：让它读你的笔记（只读，改不了）"
-          aria-label="AI 助手"
-          className={`${TOGGLE_BTN} ${
-            agentPane
-              ? 'border-accent-line bg-accent-soft text-accent'
-              : 'border-transparent text-ink-3 hover:bg-surface-2 hover:text-ink'
-          }`}
-        >
-          <Sparkle size={14} />
-        </button>
-
         <div className="hidden shrink-0 items-center gap-1 md:flex">
+        {!bookAside && (
+          <button
+            type="button"
+            data-agent-toggle
+            data-on={onAgent ? '1' : '0'}
+            onClick={toggleAgent}
+            aria-pressed={onAgent}
+            title={onAgent ? '收起右栏（助手）' : 'AI 助手：右栏翻到助手那一页'}
+            aria-label="AI 助手"
+            className={`${TOGGLE_BTN} ${
+              onAgent
+                ? 'border-accent-line bg-accent-soft text-accent'
+                : 'border-transparent text-ink-3 hover:bg-surface-2 hover:text-ink'
+            }`}
+          >
+            <Sparkle size={14} />
+          </button>
+        )}
         <button
           type="button"
           data-left-toggle

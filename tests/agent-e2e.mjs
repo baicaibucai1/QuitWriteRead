@@ -2,11 +2,12 @@
  * AI 助手端到端：**在真浏览器里把内核跑一遍**。
  *
  * 它验的不是"模型说了什么"（演示模式那句话是写死的），而是这几件事：
- *   ① 入口唯一 —— 顶栏那颗星，且左栏 dock 没被塞第五颗；
- *   ② 事件流接上了 —— 文字 / 工具卡 / 状态徽标 / 计数都动；
- *   ③ 工具**真的**跑了 —— `list_notes` 的卡是真的 completed，
+ *   ① 入口唯一 —— 顶栏那颗星，翻的是**右栏那排签**，且左栏 dock 没被塞第五颗；
+ *   ② 没接上模型时**不装作答复** —— 明说没配，并把人指到设置里；
+ *   ③ 事件流接上了 —— 文字 / 工具卡 / 状态徽标 / 计数都动；
+ *   ④ 工具**真的**跑了 —— `list_notes` 的卡是真的 completed，
  *      并且 `read_note` 读出来的是仓库里那一篇的正文（不是编的）；
- *   ④ 没有写权限 —— 三个工具都只读，卡上不会出现"等你点头"。
+ *   ⑤ 翻到大纲再翻回来，聊到一半的**还在**（那一页只藏不拆）。
  *
  * ⚠️ 走的是演示模式（不需要 Key）：脚本里写死的两步是确定的，
  * 拿真模型来验"链路通不通"反而验不准 —— 它今天想不想调工具是不一定的。
@@ -34,6 +35,21 @@ const ok = (label, cond, extra = '') => {
   if (!cond) failed++;
 };
 const step = (s) => console.log('\n== ' + s);
+
+/*
+ * 等一次**重建**真的完成。
+ *
+ * ⚠️ 只等"输入框可用"是不够的：配置改动有 600ms 落定时间，在那之前输入框
+ * 还是**上一个** agent 的（本来就是亮的），等它等于没等 —— 发下去的那一句
+ * 会由旧 agent 接，验的就不是想验的那个了。
+ * 所以分两步：先等它变灰（说明重开始了），再等它亮回来（说明新的建好了）。
+ */
+const waitRebuilt = async () => {
+  await page
+    .waitForFunction(() => document.querySelector('[data-agent-input]')?.disabled === true, { timeout: 8000 })
+    .catch(() => {});
+  await page.waitForFunction(() => !document.querySelector('[data-agent-input]')?.disabled, { timeout: 20000 });
+};
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true, args: ['--no-proxy-server'] });
 const page = await browser.newPage({ viewport: { width: 1500, height: 920 } });
@@ -73,14 +89,36 @@ try {
   ok('左栏 dock 还是四颗', (await page.locator('[data-dock] button').count()) === 4);
   ok('面板默认不开', (await page.locator('[data-agent-pane]').count()) === 0);
 
-  step('点开面板');
+  step('没接上模型时：明说，不装作答复');
   await page.click('[data-agent-toggle]');
   await page.waitForSelector('[data-agent-pane]', { timeout: 10000 });
+  ok('右栏翻到了助手那一页', (await page.getAttribute('[data-right-tab="agent"]', 'data-on')) === '1');
   ok('面板出来了', await page.isVisible('[data-agent-pane]'));
-  ok('抬头写着演示模式', (await page.textContent('[data-agent-mode]')).includes('演示'));
-  // 内核是懒加载的，等它真起来（输入框 disabled = 还没好）
-  await page.waitForFunction(() => !document.querySelector('[data-agent-input]')?.disabled, { timeout: 20000 });
+  /*
+   * 默认 `demo: 'off'` 且没有 Key —— 这时候它**不该**照着脚本答一句。
+   * 上一版默认演示「读」，人问"河边我看见了什么"，它答"仓库里一篇笔记都没有"
+   * （答非所问，而仓库里明明有笔记）—— 那才是"完全不可用"的根子。
+   */
+  ok('抬头写着还没接上', (await page.textContent('[data-agent-mode]')).includes('还没接上'));
+  ok('摆出了「去设置里接一个」', await page.isVisible('[data-agent-setup]'));
+  ok('输入框是灰的（没东西可问）', await page.locator('[data-agent-input]').isDisabled());
+
+  // 那颗按钮要能直接落到设置里 AI 助手那一节 —— 指路就得指到位
+  await page.click('[data-agent-goset]');
+  await page.waitForSelector('[data-settings-panel]', { timeout: 10000 });
+  ok(
+    '点它直接跳到 AI 助手那一节',
+    (await page.getAttribute('[data-settings-panel]', 'data-settings-tab')) === 'agent',
+  );
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  ok('设置关掉了', (await page.locator('[data-settings-panel]').count()) === 0);
+
+  step('接上演示「读」：等它自己重建');
+  await page.evaluate(() => window.__suisui.getState().setAgent({ demo: 'read' }));
+  await waitRebuilt();
   ok('助手起来了（输入框可用）', !(await page.locator('[data-agent-input]').isDisabled()));
+  ok('抬头写着演示', (await page.textContent('[data-agent-mode]')).includes('演示'));
 
   step('问一句：演示脚本先 list_notes');
   await page.fill('[data-agent-input]', '我有哪些笔记？');
@@ -117,17 +155,12 @@ try {
   ok('读出来的是那一篇的正文（真读到了）', readResult.includes(SEED), SEED);
 
   step('助手开口了 + 计数记了');
-  const said = await page.textContent('[data-agent-text]');
+  const said = await page.locator('[data-agent-text]').last().textContent();
   ok('有文字输出', (said ?? '').trim().length > 0, (said ?? '').slice(0, 60));
   ok('文字里点明了这是演示', (said ?? '').includes('演示'));
   const used = await page.textContent('[data-agent-usage]');
   ok('token 记上了', /\d+ tokens/.test(used ?? ''), (used ?? '').trim());
   await page.screenshot({ path: `${OUT}/20-agent.png` });
-
-  step('Esc 收得掉');
-  await page.keyboard.press('Escape');
-  await page.waitForTimeout(300);
-  ok('面板收了', (await page.locator('[data-agent-pane]').count()) === 0);
 
   /*
    * ══ 写 ══
@@ -138,9 +171,11 @@ try {
    */
   step('演示「写」：先问人，点了允许才真的写');
   await page.evaluate(() => window.__suisui.getState().setAgent({ demo: 'write' }));
-  await page.click('[data-agent-toggle]');
-  await page.waitForSelector('[data-agent-pane]', { timeout: 10000 });
-  await page.waitForFunction(() => !document.querySelector('[data-agent-input]')?.disabled, { timeout: 20000 });
+  await page.waitForTimeout(900); // 先把那条防抖的重建放过去，免得它待会儿插进来
+  // 再开一段新的：上面那轮读的工具卡不该混进来，数起来才数得准
+  await page.click('[data-agent-new]');
+  await waitRebuilt();
+  ok('抬头换成演示「写」了', (await page.textContent('[data-agent-mode]')).includes('演示「写」'));
 
   const target = await page.evaluate(
     () => `agent/演示-${new Date().toISOString().slice(0, 10)}.md`,
@@ -167,7 +202,7 @@ try {
   await page.waitForTimeout(400);
   const afterReject = await page.evaluate((p) => window.__suisui.getState().files[p] ?? null, target);
   ok('点了拒绝：那一篇还是没有', afterReject === before, String(afterReject).slice(0, 40));
-  const saidAfterReject = await page.textContent('[data-agent-text]');
+  const saidAfterReject = await page.locator('[data-agent-text]').last().textContent();
   ok('被拒了它也没说"写好了"', !(saidAfterReject ?? '').includes('追加好了'), (saidAfterReject ?? '').slice(0, 60));
 
   // —— 再允许：这次要真的落进去
@@ -195,6 +230,53 @@ try {
   // 收尾：这篇是演示写出来的，删掉，别留在仓库里
   await page.evaluate((p) => window.__suisui.getState().removeFile(p), target);
   await page.waitForTimeout(400);
+
+  /*
+   * ══ 它是右栏的一页，不是浮层 ══
+   *
+   * 这一段验的是"搬进右栏"之后新的那几条：两颗签、翻页不丢、收起整栏。
+   */
+  step('右栏两页签：翻到大纲再翻回来，聊的还在');
+  ok('两颗签都在', (await page.locator('[data-right-tab]').count()) === 2);
+  ok('现在停在助手', (await page.getAttribute('[data-right-tab="agent"]', 'data-on')) === '1');
+  const kept = await page.locator('[data-agent-text]').count();
+  ok('此刻助手确实说过话', kept >= 1, String(kept));
+
+  await page.click('[data-right-tab="outline"]');
+  await page.waitForTimeout(300);
+  ok('大纲那一页翻上来了', (await page.getAttribute('[data-right-tab="outline"]', 'data-on')) === '1');
+  ok('助手那一页藏起来了（不是拆掉）', !(await page.isVisible('[data-agent-pane]')));
+
+  await page.click('[data-right-tab="agent"]');
+  await page.waitForTimeout(300);
+  ok(
+    '翻回来：刚才那几句还在（没被拆掉重来）',
+    (await page.locator('[data-agent-text]').count()) === kept,
+    `${await page.locator('[data-agent-text]').count()} vs ${kept}`,
+  );
+  await page.screenshot({ path: `${OUT}/23-agent-in-rightpane.png` });
+
+  step('再点那颗星：把右栏收起来');
+  await page.click('[data-agent-toggle]');
+  await page.waitForTimeout(300);
+  ok('右栏收了', await page.evaluate(() => window.__suisui.getState().rightOpen === false));
+  ok('助手跟着看不见了', !(await page.isVisible('[data-agent-pane]')));
+  await page.click('[data-agent-toggle]');
+  await page.waitForTimeout(300);
+  ok('再点一次又回来了', await page.isVisible('[data-agent-pane]'));
+
+  step('窄屏（手机）不给那颗星');
+  /*
+   * 手机上右栏整条都不渲染 —— 那颗星给了就是一颗按了没反应的按钮。
+   * 宁可手机上没有助手，也不给一颗骗人的按钮。
+   */
+  await page.setViewportSize({ width: 420, height: 860 });
+  await page.waitForTimeout(400);
+  // ⚠️ 这颗星是靠 CSS（`hidden md:flex`）收的，节点还在 —— 所以要问**看得见吗**，不能问"有几个"
+  ok('窄屏没有助手入口', !(await page.locator('[data-agent-toggle]').isVisible()));
+  ok('右栏也不在', (await page.locator('[data-rightpane-tabs]').count()) === 0);
+  await page.setViewportSize({ width: 1500, height: 920 });
+  await page.waitForTimeout(300);
 
   step('零报错');
   ok('没有页面错误', errors.length === 0, errors.slice(0, 4).join(' | '));

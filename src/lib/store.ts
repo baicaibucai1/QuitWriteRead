@@ -89,6 +89,9 @@ export const SIDEBAR_DEFAULT = { L: 272, R: 250 } as const;
 /** 设置对话框里的四个分节。**每一项都得对应一节真内容**，空节不如不分 */
 export type SettingsTab = 'general' | 'sync' | 'agent' | 'reading' | 'about';
 
+/** 右栏的哪一页 */
+export type RightTab = 'outline' | 'agent';
+
 /**
  * 演示模式的三档。
  *
@@ -106,17 +109,28 @@ export type AgentSettings = {
   demo: DemoMode;
   /** 接上真模型后，还准它写笔记吗。**默认开** —— 每次写都会弹卡，卡就是那道闸 */
   allowWrite: boolean;
+  /** 服务商（`prov`。选一家自动带出地址与常用型号） */
+  prov: string;
   baseURL: string;
   apiKey: string;
   model: string;
 };
 
 export const DEFAULT_AGENT: AgentSettings = {
-  demo: 'read',
+  /*
+   * ⚠️ `demo` 默认**必须是 off**。
+   *
+   * 上一版默认 'read'，本意是"没 Key 也能看一眼"，结果是：人打开助手问一句，
+   * 它按脚本答一句**跟问题无关的话** —— 看着像在工作，其实根本没连模型。
+   * 那比"明说还没配"糟得多：人对着一个装作懂的东西，还得先自己发现它是假的。
+   * 没配就是没配，界面上直说 + 指路去设置，演示是要人**主动选**才走的。
+   */
+  demo: 'off',
   allowWrite: true,
-  baseURL: 'https://api.openai.com/v1',
+  prov: 'deepseek',
+  baseURL: 'https://api.deepseek.com/v1',
   apiKey: '',
-  model: 'gpt-4o-mini',
+  model: 'deepseek-chat',
 };
 
 /**
@@ -308,11 +322,17 @@ type State = {
   od: OneDriveConfig;
   /** AI 助手的接法。**持久化** —— 换台机器不重填一遍 equals 白配 */
   agent: AgentSettings;
-  /**
-   * 助手面板开不开。**不持久化** —— 跟 `settings` 一条理由：
-   * 下次打开被一个对话框糊住半屏是打扰。
+  /*
+   * 右栏翻到哪一页：大纲还是助手。
+   *
+   * 它长在右栏**这一列里**而不是另开一个浮层，是因为助手要跟正文同时看得见 ——
+   * 它读的就是你正在写的那篇，隔着一层遮罩问「这篇讲了什么」是自找别扭。
+   *
+   * **不持久化**：每次打开该回到大纲（那是这一栏的本来用途）；
+   * 想聊上一轮接着聊，得先把"记住对话"做了 —— 在那之前，留一个空白的助手
+   * 反而比留一个聊到一半、内容已经丢了的助手诚实。
    */
-  agentPane: boolean;
+  rightTab: RightTab;
   /**
    * 侧栏按标签筛选（点正文里的 `#tag` 进来的）。`null` = 不筛，照常按目录显示。
    * **不持久化** —— 下次打开看见列表只露出几个文件会以为文件丢了。
@@ -415,7 +435,7 @@ type State = {
   setOd: (patch: Partial<OneDriveConfig>) => void;
   /** 改助手的接法。改完**下一次开面板才生效**（Agent 实例要重建，见 ChatPane） */
   setAgent: (patch: Partial<AgentSettings>) => void;
-  setAgentPane: (v: boolean) => void;
+  setRightTab: (v: RightTab) => void;
   setToken: (t: string) => void;
   setShowAll: (v: boolean) => void;
   setDrawer: (v: boolean) => void;
@@ -617,7 +637,7 @@ export const useStore = create<State>()(
       dav: { url: 'https://dav.jianguoyun.com/dav/QuitWriteRead', user: '', pass: '' },
       od: { token: '', basePath: 'QuitWriteRead' },
       agent: { ...DEFAULT_AGENT },
-      agentPane: false,
+      rightTab: 'outline',
       tagFilter: null,
       rightOpen: true,
       leftOpen: true,
@@ -777,7 +797,7 @@ export const useStore = create<State>()(
       setDav: (patch) => set({ dav: { ...get().dav, ...patch } }),
       setOd: (patch) => set({ od: { ...get().od, ...patch } }),
       setAgent: (patch) => set({ agent: { ...get().agent, ...patch } }),
-      setAgentPane: (v) => set({ agentPane: v }),
+      setRightTab: (v) => set({ rightTab: v }),
 
       setToken: (t) => set({ token: t }),
       setShowAll: (v) => set({ showAll: v }),
@@ -1306,6 +1326,19 @@ export const useStore = create<State>()(
     }),
     {
       name: 'suisui.demo.v1',
+      /*
+       * 老库里存的那份 `agent` 可能**缺字段**（`prov` 是后加的）。
+       * 缺了不补，界面上就是"一颗药丸都没选中"，人看不出自己接的是哪一家。
+       * ⚠️ 只补**缺的**，不改人填过的 —— 这种回填不是迁移，别碰已有值。
+       */
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<State>;
+        return {
+          ...current,
+          ...p,
+          ...(p.agent ? { agent: { ...DEFAULT_AGENT, ...p.agent } } : {}),
+        } as State;
+      },
       /*
        * ⚠️ `files` **故意不在这儿**：仓库才是笔记的家，localStorage 里再存一份就是
        * 第二个真相，两边不一致时没人知道该信谁（见 adoptRepo 里那段迁移 ——

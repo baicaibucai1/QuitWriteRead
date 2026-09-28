@@ -58,6 +58,22 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     models: ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini'],
     keyHint: 'platform.openai.com 的 API keys',
   },
+  /*
+   * Agnes（agnes-ai.com）。
+   * 地址在三份官方集成文档里是一致的（Cherry Studio / OpenClaw / Opencode
+   * 都写 `apihub.agnes-ai.com/v1`，且都强调**别写成 /v1/chat/completions**）。
+   * 型号那三都有官方文档出处；它家从 2026-06 起有**免费额度**的 Token Plan，
+   * 所以对"先零成本跑通"这件事特别合适 —— 但也有付费型号（2.5-pro），
+   * 换之前最好先看一眼自己的额度。
+   * 型号列表以「试一下」从 /models 拿回来的为准。
+   */
+  {
+    id: 'agnes',
+    label: 'Agnes',
+    baseURL: 'https://apihub.agnes-ai.com/v1',
+    models: ['agnes-2.5-flash', 'agnes-2.5-pro', 'agnes-2.0-flash'],
+    keyHint: 'platform.agnes-ai.com 里注册后建一个（有免费额度）',
+  },
   {
     id: 'openrouter',
     label: 'OpenRouter',

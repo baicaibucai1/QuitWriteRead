@@ -180,7 +180,7 @@ step('AI 助手那一节：选一家 → 填 Key → 试一下');
    */
   ok('默认不演示', await page.evaluate(() => window.__suisui.getState().agent.demo === 'off'));
   ok('所以一上来就给 Key 输入框', (await page.locator('[data-agent-key]').count()) === 1);
-  ok('服务商七颗可选', (await page.locator('[data-provider]').count()) === 7);
+  ok('服务商八颗可选', (await page.locator('[data-provider]').count()) === 8);
   ok('默认选中 DeepSeek', (await page.getAttribute('[data-provider="deepseek"]', 'data-on')) === '1');
   ok(
     '地址跟着那一家走（不用人记 /v1 这种）',
@@ -197,6 +197,18 @@ step('AI 助手那一节：选一家 → 填 Key → 试一下');
     (await page.inputValue('[data-agent-baseurl]')) === 'https://dashscope.aliyuncs.com/compatible-mode/v1',
   );
   ok('型号也换成它家的', (await page.inputValue('[data-agent-model]')) === 'qwen-plus');
+
+  /*
+   * Agnes：这家有**免费额度**，对"先零成本跑通"特别合适 —— 所以要确认真选得上。
+   * 只验地址与型号跟着走；它通不通由人自己点「试一下」决定（要不要联网由他说了算）。
+   */
+  await page.click('[data-provider="agnes"]');
+  await page.waitForTimeout(200);
+  ok('选 Agnes：地址是 apihub 那个', (await page.inputValue('[data-agent-baseurl]')) === 'https://apihub.agnes-ai.com/v1');
+  ok('默认型号是 2.5-flash', (await page.inputValue('[data-agent-model]')) === 'agnes-2.5-flash');
+  ok('常用型号摆出来了', (await page.locator('[data-model-chip]').count()) === 3);
+  await page.click('[data-provider="deepseek"]');
+  await page.waitForTimeout(200);
 
   /*
    * 试一下。**没填 Key 时不打网络** —— 这条要验的是"它会直说还没填 Key"，

@@ -232,6 +232,107 @@ try {
   await page.waitForTimeout(400);
 
   /*
+   * ══ 创建能力：create_note ══
+   *
+   * 走**生产那一套代码**（开发期的模块图里能手取），没有替身。
+   * 之所以不靠"问它一句让它去建"：模型今天想不想调这个工具是不一定的，
+   * 而"能建"和"绝不盖掉已有的"这两条必须**每次都是真的**，不能赌概率。
+   */
+  step('create_note：真的能建，而且绝不盖掉已有的');
+  const NEW_PATH = `agent/助手新建-${Date.now()}.md`;
+  const keep = await page.evaluate(() => window.__suisui.getState().current);
+
+  const created = await page.evaluate(async (path) => {
+    const m = await import('/src/lib/agent/note-tools.ts');
+    const ctx = {
+      signal: new AbortController().signal,
+      workspaceRoot: '/repo',
+      sessionId: 'e2e',
+      runId: 'e2e',
+      toolCallId: 'e2e',
+      sandbox: {
+        root: '/repo',
+        additionalRoots: [],
+        resolve: async (p) => p,
+        resolveSync: (p) => p,
+        isInside: () => true,
+      },
+      logger: { debug() {}, info() {}, warn() {}, error() {} },
+      progress() {},
+      services: {},
+    };
+    const call = async (list, name, args) => {
+      const t = list.find((x) => x.name === name);
+      if (!t) return { missing: true, text: '' };
+      const r = await t.execute(args, ctx);
+      return { text: String(r.content), isError: !!r.isError };
+    };
+    const full = m.createNoteTools({ allowWrite: true });
+    const off = m.createNoteTools({ allowWrite: false });
+    return {
+      // ① 关掉写权限时，写的三个**一个都不该在**
+      offNames: off.map((t) => t.name),
+      // ② 没标 readOnly → 内核那道门会拦下它并弹卡（代码担保，不是提示词）
+      createReadOnly: full.find((t) => t.name === 'create_note')?.readOnly === true,
+      fullNames: full.map((t) => t.name),
+      // ③ 建一个不存在的（连目录一起建）
+      made: await call(full, 'create_note', { path, content: '# 助手建的\n\n这是新建的一篇。' }),
+      // ④ 再建一次同名 —— 必须拒绝，而且一个字都不动
+      twice: await call(full, 'create_note', { path, content: '这回是来覆盖的' }),
+      /*
+       * 顺手钉住另一条：**读一个根本没有的篇要说"读不出来"**。
+       * 以前仓库那一份对不存在的路径返回空串，于是给出一篇空笔记 ——
+       * 模型拿到"这篇是空的"这个假事实，比直接说没有更糟。
+       */
+      noSuch: await call(full, 'read_note', { path: '根本没有的目录/没有这篇.md' }),
+      // ⑤ 三道护栏
+      dotdot: await call(full, 'create_note', { path: '../逃出去.md', content: 'x' }),
+      books: await call(full, 'create_note', { path: 'books/别建在这儿.md', content: 'x' }),
+      empty: await call(full, 'create_note', { path: '随便/空壳.md', content: '   ' }),
+    };
+  }, NEW_PATH);
+
+  console.log('  工具清单:', created.fullNames.join(' '));
+  ok('create_note 在工具里', created.fullNames.includes('create_note'));
+  ok('关掉写权限时它就不注册了', !created.offNames.includes('create_note'), created.offNames.join(','));
+  ok('写的三个一起消失', created.offNames.length === 3, created.offNames.join(','));
+  ok('它没标 readOnly（所以内核必定弹卡问人）', created.createReadOnly === false);
+
+  ok('建成功了', !created.made.isError && created.made.text.includes('新建了'), created.made.text.slice(0, 60));
+  ok(
+    '建完它自己出现在左栏（我没被切走）',
+    (await page.locator(`[data-file="${NEW_PATH}"]`).count()) === 1,
+    NEW_PATH,
+  );
+  ok(
+    '当前打开的还是原来那篇（不抢焦点）',
+    (await page.evaluate(() => window.__suisui.getState().current)) === keep,
+    String(keep),
+  );
+  ok(
+    '正文就是给的那段',
+    (await page.evaluate((p) => window.__suisui.getState().files[p] ?? '', NEW_PATH)).includes('这是新建的一篇'),
+  );
+
+  ok(
+    '读一篇根本没有的 → 说"读不出来"，不是给一篇空的',
+    created.noSuch.isError && created.noSuch.text.includes('读不出来'),
+    created.noSuch.text.slice(0, 60),
+  );
+  ok('同名的再来一次 → 拒绝', created.twice.isError && created.twice.text.includes('已经存在'), created.twice.text.slice(0, 60));
+  ok(
+    '而且**真的没盖掉**（还是原来那段）',
+    (await page.evaluate((p) => window.__suisui.getState().files[p] ?? '', NEW_PATH)).includes('这是新建的一篇'),
+  );
+  ok('想跳出仓库的路径 → 拦下', created.dotdot.isError && created.dotdot.text.includes('..'));
+  ok('往书架里建 → 拦下', created.books.isError && created.books.text.includes('书架'));
+  ok('空正文 → 不建空壳', created.empty.isError && created.empty.text.includes('空的正文'));
+
+  // 收尾：这篇是这次新建的，删掉
+  await page.evaluate((p) => window.__suisui.getState().removeFile(p), NEW_PATH);
+  await page.waitForTimeout(400);
+
+  /*
    * ══ 它是右栏的一页，不是浮层 ══
    *
    * 这一段验的是"搬进右栏"之后新的那几条：两颗签、翻页不丢、收起整栏。

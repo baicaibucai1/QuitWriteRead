@@ -20,6 +20,7 @@ export const AGENT_TOOLS: AgentToolRow[] = [
   { name: 'list_notes', what: '列出仓库里的笔记' },
   { name: 'read_note', what: '读一篇笔记' },
   { name: 'search_notes', what: '在全部笔记里搜一段' },
+  { name: 'create_note', what: '新建一篇（那篇已存在就拒绝，不覆盖）', write: true },
   { name: 'write_note', what: '整篇改写（会先问一句）', write: true },
   { name: 'append_note', what: '往末尾追加一段（会先问一句）', write: true },
   { name: 'list_books', what: '列出书架上的书' },

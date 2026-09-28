@@ -832,7 +832,7 @@ function Agent() {
   return (
     <Section
       title="AI 助手"
-      intro="右栏那一页里问它（顶栏那颗星把右栏翻过去）。笔记能读能写，书架上的书能读 —— 一共九个工具，下面列全了。"
+      intro={`右栏那一页里问它（顶栏那颗星把右栏翻过去）。笔记能列、能读、能搜、能新建、能改，书架上的书能读 —— 一共 ${AGENT_TOOLS.length} 个工具，下面列全了。`}
     >
       {/* 一、选一家 */}
       <div className="mb-1 mt-0.5 text-[11.5px] text-ink-3">服务商</div>
@@ -1047,7 +1047,7 @@ function Agent() {
             <Toggle
               id="agent-write"
               label="让它写笔记"
-              hint="write_note / append_note 两个工具。不是注册了再拦 —— 关掉时模型根本看不见它们"
+              hint="create_note（新建）/ write_note（整篇改写）/ append_note（末尾追加）三个。不是注册了再拦 —— 关掉时模型根本看不见它们"
               on={agent.allowWrite}
               onChange={(v) => setAgent({ allowWrite: v })}
             />

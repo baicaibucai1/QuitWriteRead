@@ -418,7 +418,7 @@ export default function ChatPane() {
               <p className="text-[12.5px] text-ink-2">问一句跟你的笔记有关的事。</p>
               <p className="mt-1.5 text-[11.5px] leading-relaxed text-ink-3">
                 笔记能列、能读、能搜
-                {canWrite ? '，也能写（写之前一定先问你）' : ' —— 写工具现在是关的'}
+                {canWrite ? '，能新建、也能改（动笔之前一定先问你）' : ' —— 写工具现在是关的'}
                 ；书架上的书能列出、读某一章、书内搜、读你的批注。
                 {!canWrite && <br />}
                 {!canWrite && '不开写权限的话，它能说的全是"真的看到了什么"。'}

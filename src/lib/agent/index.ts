@@ -77,8 +77,12 @@ const HOUSE_RULES = [
     text: 'Books live on a separate shelf from notes: list_books first, then read_book by chapter number (1-based) or search_book. They are read-only — there is no tool to change them.',
   },
   {
+    id: 'creating',
+    text: 'To make a note that does not exist yet, use create_note. It refuses when the note already exists — that is deliberate, so never use write_note to "create" (it would replace whatever was there). Directories are created as needed.',
+  },
+  {
     id: 'writing',
-    text: 'Write only through write_note / append_note. They ask the reader first: if the call comes back rejected, say it was not written and never claim otherwise. Use append_note unless replacing the whole note is really what was asked.',
+    text: 'To change a note that already exists, use write_note (replaces the whole note) or append_note (adds at the end); prefer append_note unless replacing is really what was asked. They ask the reader first: if the call comes back rejected, say it was not written and never claim otherwise.',
   },
 ];
 

@@ -326,12 +326,12 @@ step('AI 助手那一节：选一家 → 填 Key → 试一下');
   ok('「忘掉」把本机那份清了', (await page.locator('[data-model-list]').count()) === 0);
   ok('也真的从 store 里没了', await page.evaluate(() => window.__suisui.getState().agent.models.length === 0));
 
-  ok('九个工具全列出来了', (await page.locator('[data-agent-tool-row]').count()) === 9);
+  ok('十个工具全列出来了', (await page.locator('[data-agent-tool-row]').count()) === 10);
   ok('写权限默认开着', (await page.getAttribute('[data-toggle="agent-write"]', 'aria-checked')) === 'true');
-  ok('所以计数是九个', (await page.textContent('[data-agent-tool-count]')).trim().startsWith('9 /'));
+  ok('所以计数是十个', (await page.textContent('[data-agent-tool-count]')).trim().startsWith('10 /'));
   await page.click('[data-toggle="agent-write"]');
   await page.waitForTimeout(200);
-  ok('关掉写权限，清单上两个写工具一起摘', (await page.getAttribute('[data-agent-tool-row="append_note"]', 'data-on')) === '0');
+  ok('关掉写权限，清单上三个写工具一起摘', (await page.getAttribute('[data-agent-tool-row="append_note"]', 'data-on')) === '0');
   ok('计数跟着变七个', (await page.textContent('[data-agent-tool-count]')).trim().startsWith('7 /'));
 
   // 演示三档：它是退路，不再抢在前面 —— 选了演示，Key 那一片就不该摆着
